@@ -169,7 +169,7 @@ class clusterBH:
         
         # Galactic properties.
         self.Mg = 1.023 ** 2 * self.Vc ** 2 * self.rg * 1e3 / self.G # [Msun] Mass of the galaxy inside the orbit of the cluster. It is derived from orbital properties.
-        self.L = 1.023 * self.Vc * self.rg * 1e3 # [pc^2/Myrs] Anfular momentum.
+        self.L = 1.023 * self.Vc * self.rg * 1e3 # [pc^2/Myrs] Angular momentum.
         
         # Define the tidal models dictionary.
         self.tidal_models = { # Both the half-mass and the tidal radius should be in [pc]. All the rest parameters are fixed. In a different scenario, they should be treated as variables.
