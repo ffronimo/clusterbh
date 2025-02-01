@@ -1514,7 +1514,7 @@ class clusterBH:
             # Prepare data for writing
             data = numpy.column_stack((self.t, self.Mbh, self.Mst, self.rh, self.rt, self.mbh, self.mst_sev, self.mbh_max))
 
-            # Write data with metadata
+            # Write data
             numpy.savetxt(self.outfile, data, header=header, fmt="%12.5e", comments="")
 
 
