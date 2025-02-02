@@ -44,6 +44,7 @@ class clusterBH:
         self.alpha_BH = 0.5 # Slope in the BHMF. If kicks are considered, the slope cannot be equal to -5 - 3k, where k is a positive integer. The special value of -2 (k=-1) is considered, but other values are not. These can be used, but without kicks.
         self.fretm = 1 # Retention fraction of BHs. The default value neglects kicks.
         self.t_bhcreation = 8 # [Myrs] Time required to create all BHs.
+        self.N_points = 500 # Number of points used for even spacing.
         
         # Model parameters. 
         self.mns = 1.4 # [Msun] Mass of Neutron Stars (NS).
@@ -607,8 +608,7 @@ class clusterBH:
                        return mm ** (3 * self.b_BH) * (1 - h1) - self.mlo ** (3 * self.b_BH) * (1 - h2) # BH mass extracted by integrating the mass function, neglecting the constant prefactor.
 
                 # Solve with respect to the maximum BH mass.
-                N_points = 500 # Create points for mmax, to see which value is closer to describing the total BH mass a given time instance. A few hundreds to thousands suffice for the desired accuracy.
-                mmax_ = numpy.linspace(self.mlo, self.mup, N_points) # List of possible values for the maximum BH mass at a given time instance.
+                mmax_ = numpy.linspace(self.mlo, self.mup, self.N_points) # List of possible values for the maximum BH mass at a given time instance.
                 qmb = mmax_ / self.mb # Auxiliary mass rations that can be used in the solution.
 
                 A = self.Mbh0 / integr(self.mup, self.qub) # Constant prefactor from the mass function.
@@ -669,7 +669,7 @@ class clusterBH:
             numerator, _ = quad(lambda m: m ** (self.alpha_BH + 1), self.mlo, mmax, epsabs=1e-5, epsrel=1e-5)
             denominator, _ = quad(lambda m: m ** (self.alpha_BH), self.mlo, mmax, epsabs=1e-5, epsrel=1e-5)
             
-            return numerator / denominator # [Msun]
+            return numerator / numpy.maximum(denominator, 1e-99) # [Msun]
        
     # Tidal radius. Applies for any orbit on spherically symmetric potential. If axisymmetric are used, a different prescription is needed.
     def _rt(self, M): 
@@ -1507,15 +1507,20 @@ class clusterBH:
         
         # Check if the results need to be saved. The default option is to save the solutions of the differential equations as well as the tidal radius and average masses of the two components. Additional inclusions are possible.
         if self.output:
-           
+            
+
             # Define table header
-            header = "# t[Gyrs] Mbh[msun] Mst[msun] rh[pc] rt[pc] mbh[msun] mst[msun] mbh_max[msun]"
+            table_header = "# t[Gyrs] Mbh[msun] Mst[msun] rh[pc] rt[pc] mbh[msun] mst[msun] mbh_max[msun]"
+
+            # Table header
+            full_header =  table_header 
 
             # Prepare data for writing
             data = numpy.column_stack((self.t, self.Mbh, self.Mst, self.rh, self.rt, self.mbh, self.mst_sev, self.mbh_max))
 
-            # Write data
-            numpy.savetxt(self.outfile, data, header=header, fmt="%12.5e", comments="")
+            # Write data with metadata
+            numpy.savetxt(self.outfile, data, header=full_header, fmt="%12.5e", comments="")
+
 
 
 #######################################################################################################################################################################################################################################################
