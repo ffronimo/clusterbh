@@ -9,7 +9,7 @@ numpy.seterr(invalid='ignore', divide='ignore')
 
 """
 - The current parameters only work with the default settings. If a different model is chosen, a different set of values may be needed.
-- The default option requires the Simple Stellar Population package. To install it, run 'pip install astro-ssptools==2.0.0'. Version 2.0.0 uses Zsolar=0.02. If not, simply state ssp=False in kwargs before a run.
+- The default option requires the Simple Stellar Population package. To install it, run 'pip install astro-ssptools==2.0.1'. Version 2.0.1 uses Zsolar=0.02. If not, simply state ssp=False in kwargs before a run.
   For more details, visit SMU-clusters/ssptools. 
 """
 
@@ -164,25 +164,25 @@ class clusterBH:
         # Balance model. It can be used for a smooth connection of the unbalanced phace with post core collapse.
         self.balance_model = 'error_function' # Default option to error function. Uses a function in order to smoothly connect the unbalanced phase to post core collapse. Serves as a future implementation to make the differential equations continuous.
         
-        # IMF. For top heavy, fine-tune a3. Possible extensions to a_slope4, m_break5, nbin4 and more are available as well. The user can include those in a sequence in kwargs and the script will read it.
-        self.a_slope1 = -1.3 # Slope of mass function for the first interval.
-        self.a_slope2 = -2.3 # Slope of mass function for the second interval.
-        self.a_slope3 = -2.3 # Slope of mass function for the third interval. All intervals are dictated by the mass breaks.
-        self.m_break1 = 0.08 # [Msun] Lowest stellar mass of the cluster.
-        self.m_break2 = 0.5 # [Msun] Highest stellar mass in the first interval.
-        self.m_break3 = 1. # [Msun] Highest stellar mass in the second interval.
-        self.m_break4 = 150. # [Msun] Highest mass in the cluster. Default option for 4 mass breaks, otherwise the user can specify which is the largest mass.
-        self.nbin1 = 5 # Number of bins in the first interval.
-        self.nbin2 = 5 # Number of bins in the second interval.
-        self.nbin3 = 20 # Number of bins in the third interval.
+        # IMF.
+        # For top heavy, fine-tune a3.
+        # Pass in lists for a_slopes, m_breaks and nbins. Any number of IMF
+        # intervals, based on size of lists. m_breaks must be size N+1
         # Mass breaks define the intervals, slopes the exponent in the IMF in each interval, indicating the probability of forming such star. Bins are used to improve the numerical resolution of the IMF and ensure accurate sampling.
         
-        # Default options for extracting the BH population. Important only if the user works with the SSP.
-        self.BH_IFMR = 'banerjee20' # Default option for the BH IFMR.
-        self.WD_IFMR = 'mist18' # Default option for the WD IFMR
-        self.kick_method = 'maxwellian' # Default option for kicks, if activated.
-        self.binning_method = 'default' # Default option for binning.
-        
+        # Slopes of mass function
+        self.a_slopes = [-1.3, -2.3, -2.3]
+
+        # Mass function break masses
+        self.m_breaks = [0.08, 0.5, 1., 150.]
+
+        # Number of bins per interval of the mass function
+        self.nbins = [5, 5, 20]
+
+        # All other arguments to be passed to InitialBHPopulation, including
+        # IFMR and natal kick options. See SSPtools documentation for details
+        self.ibh_kwargs = dict()
+
         # Check input parameters, then proceed with the computations.
         if kwargs is not None:
             for key, value in kwargs.items():
@@ -230,24 +230,7 @@ class clusterBH:
             'NFW': lambda r, M: - self.G * M / r * log(1 + r / self.rpc),
             'Isochrone': lambda r, M: - self.G * M / (self.rpc + sqrt(r ** 2 + self.rpc ** 2))
         }
-        
-        # Introduce dictionaries for essential properties of the BH population for a given set of initial conditions. Contains strings similar to their names. They serve as input to get the BHMF from the SSP.
-        
-        # Dictionary for the BH IFMR. 
-        self.BH_IFMR_dict = {
-            'banerjee20' : 'banerjee20', 'cosmic-rapid': 'cosmic-rapid',
-            'cosmic-delayed': 'cosmic-delayed', 'linear': 'linear', 
-            'powerlaw': 'powerlaw','brokenpowerlaw': 'brokenpowerlaw'}
-        
-        # Dictionary for the WD IFMR.
-        self.WD_IFMR_dict = {'mist18':'mist18', 'linear':'linear'}
-        
-        # Dictionary for kicks.
-        self.kick_dict = {'maxwellian' : 'maxwellian', 'sigmoid' : 'sigmoid'}
-        
-        # Dictionary for binning.
-        self.binning_dict = {'default' : 'default', 'split_log': 'split_log', 'split_linear': 'split_linear'}
-        
+
         # Dictionary that introduces a scaling on the BH ejection rate with respect to Spitzer's paramater. Can be used as a proxy for different parametrizations as well.
         self.beta_dict = {
            'exponential': lambda S: 1 - exp(- (S / self.S0) ** self.gamma2),
@@ -265,19 +248,15 @@ class clusterBH:
             'exponential': lambda t: 1 - exp(- self.gamma3 * (t / self.tcc) ** self.gamma4)
         }
         
-        # Check the available IMF. The default option is 3 slopes, bins and break masses.
-        self.a_slopes, self.m_breaks, self.nbins = self._IMF_read() # The user is allowed to include other regions in the IMF, for instance m > 150 with a steeper slope, -2.7. m_breaks are in [Msun].
-        
-     #   self.m0 = self._initial_average_mass(self.a_slopes, self.m_breaks) # [Msun] Average mass obtained for this particular IMF. 
-        
+        # self.m0 = self._initial_average_mass(self.a_slopes, self.m_breaks) # [Msun] Average mass obtained for this particular IMF. 
+
         self.FeH = log10(self.Z / self.Zsolar) # Metallicity in solar units.
         
         self.M0 = self.m0 * N # [Msun] Total mass of stars (cluster) initially. This is used for computations, even if the BH population is present in clusterBH at t=0.
         self.rh0 = (3 * self.M0 / (8 * pi * rhoh)) ** (1./3) # [pc] Initial half-mass radius.
         
         self.vesc0 = self._vesc(self.M0, self.rh0) # [km/s] Initial escape velocity.
-        
-        
+
         # Check the BH ejection model.
         if not hasattr(self, 'sev_model') or self.sev_model not in self.sev_dict:
             raise ValueError(f"Invalid model for stellar evolution: {self.sev_model}.")
@@ -297,32 +276,15 @@ class clusterBH:
         # Check whether SSP are used for the BHMF.
         if (self.ssp):
             import ssptools # Import the package. Must be installed first.
-            
-            # Check if the conditions for the BHMF are met.
-            if hasattr(self, 'BH_IFMR') and self.BH_IFMR in self.BH_IFMR_dict:
-                self.BH_IFMR_method = self.BH_IFMR_dict[self.BH_IFMR]
-            else:
-                raise ValueError(f"Invalid BH IFMR: {self.BH_IFMR}.")
-            
-            if hasattr(self, 'WD_IFMR') and self.WD_IFMR in self.WD_IFMR_dict:
-                self.WD_IFMR_method = self.WD_IFMR_dict[self.WD_IFMR]
-            else:
-                raise ValueError(f"Invalid BH IFMR: {self.BH_IFMR}.")
         
-            if hasattr(self, 'kick_method') and self.kick_method in self.kick_dict:
-                self.kick_method = self.kick_dict[self.kick_method]
-            else:
-                raise ValueError(f"Invalid kick method: {self.kick_method}.")
-        
-            if hasattr(self, 'binning_method')  and self.binning_method in self.binning_dict:
-                self.binning_method = self.binning_dict[self.binning_method]
-            else:
-                raise ValueError(f"Invalid binning method: {self.binning_method}.")
-            
             # Implement kicks, if activated, for this IMF, number of stars, with such metallicity, central escape velocity and BHMF conditions.
-            self.ibh = ssptools.InitialBHPopulation.from_powerlaw(self.m_breaks, self.a_slopes, self.nbins, self.FeH, N0=N, vesc=self.vesc0, natal_kicks=self.kick, BH_IFMR_method=self.BH_IFMR_method, WD_IFMR_method=self.WD_IFMR_method,
-                                                              kick_method=self.kick_method, binning_method=self.binning_method, kick_slope=self.kick_slope, kick_scale=self.kick_scale, kick_vdisp=self.sigmans) # Version 2 of SSP tools. Uses solar metallicity Zsolar = 0.02.
-        
+            self.ibh_kwargs.setdefault('kick_vdisp', self.sigmans)
+
+            self.ibh = ssptools.InitialBHPopulation.from_powerlaw(
+                self.m_breaks, self.a_slopes, self.nbins, self.FeH, N0=N,
+                vesc=self.vesc0, natal_kicks=self.kick, **self.ibh_kwargs
+            )
+
             self.Mbh0 = self.ibh.Mtot  # [Msun] Expected initial mass of BHs due to kicks.
             self.f0 = self.Mbh0 / self.M0 # Initial fraction of BHs. Should be close to 0.06 for poor-metal clusters. 
             
@@ -381,59 +343,6 @@ class clusterBH:
          
         self.evolve(N, rhoh) # Runs the integrator, generates the results.
     
-    def _IMF_read(self):
-        """
-        Processes and validates class attributes related to the initial mass function (IMF).
-
-        - Extracts `a_slopeX`, `m_breakX` [Msun], and `nbinX` attributes dynamically. The default number are 3, 4, 3 but the user is allowed to insert more. They should be in a sequence.
-        - Sorts these attributes by their numeric suffix.
-        - Validates `m_breakX` to ensure values are strictly increasing, stopping at the first invalid entry, if any.
-        - Adjusts `a_slopeX` and `nbinX` lists to align with the number of valid `m_breakX` values.
-
-        Returns:
-            tuple:
-            - a_slopes (list): Adjusted slope values.
-            - valid_m_breaks (list): Validated and sorted mass break values.
-            - nbins (list): Adjusted bin values.
-        """
-        
-        # Extract and sort attributes dynamically. The user is allowed to insert more slopes, masses and bins. They must however be in order.
-        a_slopes = [(attr, getattr(self, attr)) for attr in dir(self) if re.match(r"a_slope\d+$", attr)]
-        m_breaks = [(attr, getattr(self, attr)) for attr in dir(self) if re.match(r"m_break\d+$", attr)]
-        nbins = [(attr, getattr(self, attr)) for attr in dir(self) if re.match(r"nbin\d+$", attr)]
-
-        # Sort by the numeric suffix.
-        a_slopes = [value for _, value in sorted(a_slopes, key=lambda x: int(re.search(r"\d+$", x[0]).group()))]
-        m_breaks = [value for _, value in sorted(m_breaks, key=lambda x: int(re.search(r"\d+$", x[0]).group()))]
-        nbins = [value for _, value in sorted(nbins, key=lambda x: int(re.search(r"\d+$", x[0]).group()))]
-
-        # Validate m_breaks for increasing order. If one mass is smaller than the previous one, we stop. It is a safety measure.
-        valid_m_breaks = []
-        for i, m_break in enumerate(m_breaks):
-            if i == 0 or m_break > valid_m_breaks[-1]:
-                valid_m_breaks.append(m_break)
-            else:
-                break
-
-        # Adjust a_slopes and nbins lengths. They should be smaller than the available masses.
-        self.max_m_break = valid_m_breaks[-1] # [Msun] Maximum mass in the IMF.
-        num_valid_m_breaks = len(valid_m_breaks) 
-        num_slopes_bins = num_valid_m_breaks - 1 
-        
-        # Ensure we have the right number of slopes and bins for each mass range
-        if len(a_slopes) != num_slopes_bins:
-           raise ValueError(f"Number of slopes must be {num_slopes_bins} for {num_valid_m_breaks} mass break points. Please provide the correct number of slopes.")
-    
-        if len(nbins) != num_slopes_bins:
-           raise ValueError(f"Number of bins must be {num_slopes_bins} for {num_valid_m_breaks} mass break points. Please provide the correct number of bins.")
-    
-        # If the user has given more than the required slopes/bin, they are trancated after being sorted.
-        a_slopes = a_slopes[:num_slopes_bins]
-        nbins = nbins[:num_slopes_bins]
-
-        # Return the validated arrays
-        return a_slopes, valid_m_breaks, nbins
-
     # Compute initial average mass.
     def _initial_average_mass(self, a_slopes, m_breaks):
        """
