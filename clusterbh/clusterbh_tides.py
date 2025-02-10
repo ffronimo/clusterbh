@@ -2,7 +2,7 @@ from __future__ import division
 import numpy
 from pylab import log, sqrt, pi, log10, exp, tanh
 from scipy.special import erf, hyp2f1
-from scipy.integrate import solve_ivp, cumtrapz
+from scipy.integrate import solve_ivp, cumulative_trapezoid
 numpy.seterr(invalid='ignore', divide='ignore')
 
 """
@@ -339,8 +339,8 @@ class clusterBH:
             den_values = numpy.array(mmax_ ** self.alpha_BH / ((self.mb / mmax_) ** 3 + 1))
 
             # Precompute integrals for average mass.
-            self.num_integral = cumtrapz(num_values, mmax_, initial=0) # [Msun] Total mass in the BHMF. 
-            self.den_integral = cumtrapz(den_values, mmax_, initial=0) # Total number of BHs in the BHMF.
+            self.num_integral = cumulative_trapezoid(num_values, mmax_, initial=0) # [Msun] Total mass in the BHMF.
+            self.den_integral = cumulative_trapezoid(den_values, mmax_, initial=0) # Total number of BHs in the BHMF.
             self.mmax_ = mmax_ # Array will be recalled.
             self.Mbh_ = self.Mbh0 * self.num_integral / self.num_integral[-1] #  [Msun] BH mass points that are generated from the possible max BH mass points.
             self.Mbh_[self.Mbh_ < self.mlo] = self.mlo # Ensure that no value is below the lowest BH mass.
