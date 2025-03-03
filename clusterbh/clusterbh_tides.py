@@ -1,8 +1,8 @@
 from __future__ import division
 import numpy
-from pylab import log, sqrt, pi, log10, exp, tanh
+from numpy import log, sqrt, pi, log10, exp, tanh
 from scipy.special import erf, hyp2f1
-from scipy.integrate import solve_ivp, cumtrapz
+from scipy.integrate import solve_ivp, cumulative_trapezoid
 numpy.seterr(invalid='ignore', divide='ignore')
 
 """
@@ -93,7 +93,7 @@ class clusterBH:
         self.kin = 1 # Kinetic term of evaporating stars. Used to compute the energy carried out by evaporated stars. The deafult value neglects this contribution. The case of a varying value is available in later parts.
         self.b = 2.14 # Exponent for parameter ψ. The choices are between 2 and 2.5, the former indicating equal velocity dispersion between components while the latter complete equipartition.
         self.b_min = 2 # Minimum exponent for parameter ψ. Can be used when the exponent in ψ is varying with the BH fraction.
-        self.b_max = 2.26 # Maximum exponent for parameter ψ. Taken from Wang (2020), can be used for the case of a running exponent b.
+        self.b_max = 2.5 # Maximum exponent for parameter ψ. Taken from Wang (2020), can be used for the case of a running exponent b.
         self.b0 = 2 # Exponent for parameter ψ. It relates the fraction mst / m (average stelar mass over average mass) within rh and the total fraction.
         self.b1 = 1 # Correction to exponent of fbh in parameter ψ. It appears because the properties within the half-mass radius differ.
         self.b2 = 1.04 # Exponent of fraction mbh / m (average BH mass over average mass) in ψ. Connects properties within rh with the global. Current value is used for sparse clusters.
@@ -101,13 +101,12 @@ class clusterBH:
         self.b4 = 0.17 # Exponent for the BH ejection rate. Participates after a critical value, here denoted as fbh_crit.
         self.b5 = 0.4 # Second exponent for the BH ejection rate. Participates after a critical value for the BH fraction, here denoted as qbh_crit. It is deactivated for now.
         self.Mval0 = 3.1187 # Initial value for mass segregation. For a homologous distribution of stars, set it equal to 3.
-        self.Mval_cc = 3.1187 # Contribution of stellar evolution in half-mass radius after core collapse. It is considered along with Henon's constant. If set equal to 2, the contribution of stellar evolution vanishes and only relaxation and evaporation remain. Can be neglected in future extensions if a smoothing transition prior-post core collapse is inserted.
         self.Mvalf = 3.1187 # Final parameter for mass segregation. Describes the maximum value for the level of segregation. It is universal for all clusters and appears at the moment of core collapse.
         self.p = 0.1 # Parameter for finite time stellar evaporation from the Lagrange points. Relates escape time with relaxation and crossing time. 
         self.fbh_crit = 0.005 # Critical value of the BH fraction to use in the ejection rate of BHs. Decreases the fractions E / M φ0 properly, which for BH fractions close/above O(1)% approximately can be treated as constant.
         self.qbh_crit = 25 # Ratio of mbh / m when the BH ejection rate starts decreasing. Also for the ratio E / M φ0, however now it is deactivated. Should introduce an effective metallicity dependence.
         self.S0 = 1.7247 # Parameter used for describing BH ejections when close to equipartition. Useful for describing clusters with different metallicities using the same set of parameters, as well as for clusters with small BH populations which inevitably slow down the ejections to some extend.
-        self.gamma_exp = 7.75 # Parameter used for obtaining the correct exponent for parameter ψ as a function of the BH fraction. Uses an exponential fit to connect minimum and maximum values of b.
+        self.gamma_exp = 10 # Parameter used for obtaining the correct exponent for parameter ψ as a function of the BH fraction. Uses an exponential fit to connect minimum and maximum values of b.
         
         # Integration parameters.
         self.tend = 13.8e3 # [Myrs] Final time instance for inegration. Here taken to be a Hubble time.
@@ -166,9 +165,11 @@ class clusterBH:
        
         # Slopes of mass function.
         self.a_slopes = [-1.3, -2.3, -2.3]
+        self.a_kroupa = self.a_slopes # In case the user inserts a different set of slopes (and mass breaks), the stellar mass loss rate ν is different.
 
         # Mass function break masses.
         self.m_breaks = [0.08, 0.5, 1., 150.]
+        self.m_kroupa = self.m_breaks
 
         # Number of bins per interval of the mass function.
         self.nbins = [5, 5, 20]
@@ -180,6 +181,11 @@ class clusterBH:
         if kwargs is not None:
             for key, value in kwargs.items():
                 setattr(self, key, value)
+        
+        self.nu_factor = 0 # Factor that corrects solution for Mst, mst for the case of a different IMF that has similar upper IMF with Kroupa. Default to 0.
+        if (self.m_breaks!=self.m_kroupa) and len(self.a_slopes)==len(self.a_kroupa) and len(self.m_breaks)==len(self.m_kroupa) and (self.m_breaks[-2]==self.m_kroupa[-2]) and (self.m_breaks[-1]==self.m_kroupa[-1]) and (self.a_slopes[-1]==self.a_kroupa[-1]) : # Check whether the IMF is similar to that of Kroupa. The last two mass breaks and the final slope must agree.
+           self.nu_factor = 1 - self._sev_factor(self.a_kroupa, self.a_slopes, self.m_kroupa, self.m_breaks) # Approximate expression for auxiliary factor. It is inserted in the differential equations for Mst, mst
+        # If the upper part of the IMF changes, tsev needs to change as well.
         
         # Define models for stellar evolution. Coefficients can capture different dependences on metallicity, or an explicit dependence can be inserted.
         self.sev_dict={
@@ -339,8 +345,8 @@ class clusterBH:
             den_values = numpy.array(mmax_ ** self.alpha_BH / ((self.mb / mmax_) ** 3 + 1))
 
             # Precompute integrals for average mass.
-            self.num_integral = cumtrapz(num_values, mmax_, initial=0) # [Msun] Total mass in the BHMF. 
-            self.den_integral = cumtrapz(den_values, mmax_, initial=0) # Total number of BHs in the BHMF.
+            self.num_integral = cumulative_trapezoid(num_values, mmax_, initial=0) # [Msun] Total mass in the BHMF. 
+            self.den_integral = cumulative_trapezoid(den_values, mmax_, initial=0) # Total number of BHs in the BHMF.
             self.mmax_ = mmax_ # Array will be recalled.
             self.Mbh_ = self.Mbh0 * self.num_integral / self.num_integral[-1] #  [Msun] BH mass points that are generated from the possible max BH mass points.
             self.Mbh_[self.Mbh_ < self.mlo] = self.mlo # Ensure that no value is below the lowest BH mass.
@@ -377,6 +383,44 @@ class clusterBH:
         self.cluster_model_function = self.cluster_model_dict[self.cluster_model]
        
         self._evolve(N, rhoh) # Runs the integrator, generates the results.
+
+    def _sev_factor(self, a_slopes1, a_slopes2, m_breaks1, m_breaks2):
+            
+        def integrate_IMF(m_low, m_high, p):
+            if p == -2:  # Handle special case where p = -2 to avoid division by zero
+                return log(m_high / m_low)
+            else:
+                return (m_high ** (p + 2) - m_low ** (p + 2)) / (p + 2)
+
+        def norm_constants(a_slopes, m_breaks):
+            c_values = [1.0]  # c1 = 1.0 (initial normalization)
+            norm_constants = []
+        
+            for i in range(1, len(a_slopes)):
+                c_values.append(m_breaks[i] ** (a_slopes[i - 1] -a_slopes[i]))
+        
+            for i in range(len(c_values)):
+                norm_constants.append(numpy.prod(c_values[:i+1]))
+        
+            return norm_constants
+    
+        # Compute normalization constants for both sets of slopes
+        norm_consts1 = norm_constants(a_slopes1, m_breaks1)
+        norm_consts2 = norm_constants(a_slopes2, m_breaks2)
+        
+        # Compute the integral for both IMF sets.
+        integral1, integral2 = 0, 0
+        for i in range(len(a_slopes1)):
+            integral1 += norm_consts1[i] * integrate_IMF(m_breaks1[i], m_breaks1[i + 1], a_slopes1[i])
+            integral2 += norm_consts2[i] * integrate_IMF(m_breaks2[i], m_breaks2[i + 1], a_slopes2[i])
+        
+        # Fraction of mass in the upper limit of the Kroupa.
+        r = norm_consts2[-1] * integrate_IMF(m_breaks2[-2], m_breaks2[-1], a_slopes2[-1])
+        r /= norm_consts1[-1] * integrate_IMF(m_breaks1[-2], m_breaks1[-1], a_slopes1[-1])
+       
+        # Return the ratio of the two integrals.
+        return r * integral1 / integral2
+
     
     # Compute initial average mass.
     def _initial_average_mass(self, a_slopes, m_breaks):
@@ -523,16 +567,16 @@ class clusterBH:
             valid_bins = N_BH > 0 # Create a mask to see which bins are not empty. These have BHs.
             # Find the maximum individual BH mass in the valid bins.
 
-            if valid_bins.any() > 0:  # Ensure valid_bins is not empty
+            if valid_bins.any() > 0: # Ensure valid_bins is not empty
                mmax = numpy.max(self.ibh.m[valid_bins]) # [Msun] Consider only non-zero bins.
             else:
-               mmax = 0  # All BHs have been ejected.
+               mmax = 0 # All BHs have been ejected.
         
         else:
            
             # Arrays Mbh_ and mmax_ are constructed accordingly for all cases of alpha_BH, apart from those that are ill defined. No need to check.
-            mmax = numpy.interp(Mbh, self.Mbh_, self.mmax_) # Extract the maximum BH mass in the BHMF at any time instance.
-            # Cubic spline can also be used for interpolations. Linear interpolation suffices for this simple BHMF.
+            mmax = numpy.interp(Mbh, self.Mbh_, self.mmax_)
+            
         return mmax
     
     # Average BH mass.
@@ -579,6 +623,7 @@ class clusterBH:
             # Perform the integration. Assume a power-law BHMF, corrected for kicks. If kicks are deactivated, mb=0 by default. For a different model instead of power-law, the integrands change but also the routine for kicks in _find_mmax.
          
             return numerator / numpy.maximum(denominator, 1e-99) # [Msun]
+            return numerator / numpy.maximum(denominator, 1e-99) # [Msun]
        
     # Tidal radius. Applies for any orbit on spherically symmetric potentials. If axisymmetric are used, a different prescription is needed.
     def _rt(self, M): 
@@ -612,8 +657,8 @@ class clusterBH:
     # Average mass of stars, due to stellar evolution.    
     def _mst_sev(self):
         """
-        Solves the differential equation for mst over the time interval,
-        considering mst = m0 for t < self.tsev. 
+        Solves the differential equations for mst and Mst over the time interval,
+        considering mst = m0, Mst=M0 for t < self.tsev. 
 
         Returns:
         -------
@@ -621,12 +666,20 @@ class clusterBH:
         Array: The time steps of the solution [Myrs] to be used for interpolation.
         """
         
-        # Define the differential equation for t >= self.tsev. Use 1e-99 in the denominator to avoid division with 0 at t=0.
-        mstdot = lambda t, mst : - numpy.max(self.sev_dict[self.sev_model](self.Z, t), 0) * mst / (t + 1e-99) * numpy.heaviside(t - self.tsev, 1) if self.sev else 0 # [Msun / Myrs]
+        def evolution(t, y):
+            mst, Mst = y
+            if not self.sev:
+               return [0, 0]
+            sev_value = numpy.maximum(self.sev_dict[self.sev_model](self.Z, t), 0)
+            factor = sev_value / (t + 1e-99) * numpy.heaviside(t - self.tsev, 1)
+            return [-factor * (mst - mst * self.M0 / Mst * self.nu_factor),
+                -factor * (Mst - self.M0 * self.nu_factor)]
 
-        # Solve the differential equation using solve_ivp.
-        sol = solve_ivp(mstdot, [0, self.tend], [self.m0], method=self.integration_method, t_eval=self.t_eval, rtol=self.rtol, atol=self.atol, vectorized=self.vectorize, dense_output=self.dense_output)
-    
+        sol = solve_ivp(evolution, [0, self.tend], [self.m0, self.M0], 
+                    method=self.integration_method, t_eval=self.t_eval, 
+                    rtol=self.rtol, atol=self.atol, vectorized=self.vectorize, 
+                    dense_output=self.dense_output)
+       
         # Return the value of mst and time as arrays. The latter will be used for interpolation.
         return sol.y[0], sol.t
         
@@ -785,11 +838,8 @@ class clusterBH:
         # Number of particles.
         Np = M * ( fbh / mbh + (1 - fbh) / mst)
         
-        # Use the average mass of the whole cluster to compute this relaxation timescale.
-        mav = M / Np # [Msun]
-        
-       # Relaxation for evaporation.
-        trhstar = 0.138 * sqrt(M * rh ** 3 / self.G) / (mav *  log(self.gamma * Np)) # [Myrs]
+        # Relaxation for evaporation.
+        trhstar = 0.138 * sqrt(M * rh ** 3 / self.G) / (mst *  log(self.gamma * Np)) # [Myrs]
       
         if self.rotation: # Effect of rigid rotation.
             trhstar *= (1 - 2 * self.omega0 ** 2 * rh ** 3 / (self.G * M)) ** (3 / 2) # [Myrs] Assume constant rotation for now.
@@ -986,7 +1036,7 @@ class clusterBH:
         
         # Add tidal mass loss.
         if self.tidal: # Check if we have tides.  
-            
+           
            xi = numpy.max(self.xi_function(rh, rt), self.fmin) # Tides. With F it should be xi = (self.fmin + F * (1 - self.fmin)) * self._xi(rh, rt). Now, it is compared to the fmin.
         
            if self.finite_escape_time:
@@ -1018,8 +1068,6 @@ class clusterBH:
         
         # Unbalanced phase. Check for the impact of the Virial radius on the half-mass expansion.
         if t < tcc:
-            # This parameter describes mass segregation, used in the equation for rh. 
-            M_val = Mval 
             
             if self.Virial_evolution:
                r_dot += r * (self.rf - r) / trh # * F # [1 / Myrs] Because the Virial radius evolves slower compared to the half-mass radius, it accounts for this difference. Does not evolve in the balanced phase.
@@ -1031,8 +1079,7 @@ class clusterBH:
         
         # Balanced Phase. Check for stellar ejections.
         else:
-            M_val = self.Mval_cc # After core collapse, a constant value is assumed, different. In the isolated version of clusterBH the value is 1. For Mval_cc = 2, no contribution is assumed. For Mval_cc = Mvalf, nothing changes.
-                
+             
             rh_dot += zeta * rh / trh # [pc / Myrs] Instead of the if statement, simply multiplying with F should work.
            
             S = max(self.a11 * self.a12 ** (3 / 2) * (Mbh / Mst) ** self.b1 * (mbh / mst) ** (self.b2 * 3 / 2), self.Sf) # Spitzer's parameter for equipartition. Use parameters to relate properties with rh to global ones.
@@ -1072,9 +1119,9 @@ class clusterBH:
         # Stellar mass loss. Impact of stellar winds.
         if self.sev and t >= tsev and Mst > 0: # This contribution is present only when Mst is nonzero.
             nu = numpy.max(self.nu_function(self.Z, t), 0) # Rate of stellar mass loss due to stellar winds. Taken from a dictionary, ensures that it is non-negative.
-            mst_dot -= nu * mst / t # [Msun/Myrs] When we consider stellar evolution, the average stellar mass changes through this differential equation. It is selected so that the case of a varying nu is properly described.
-            Mst_dotsev -= nu * Mst / t # [Msun / Myrs] Stars lose mass due to stellar evolution. If it is the sole mechanism for mass loss, it implies that N is constant since mst decreases with the same rate.
-            rh_dot -= (M_val - 2) *  Mst_dotsev / M * rh # [pc / Myrs] The cluster expands for this reason. It is because a uniform distribution is assumed initially. 
+            mst_dot -= nu * (mst - mst * self.M0 / Mst * self.nu_factor) / t # [Msun/Myrs] When we consider stellar evolution, the average stellar mass changes through this differential equation. It is selected so that the case of a varying nu is properly described.
+            Mst_dotsev -= nu * (Mst - self.M0 * self.nu_factor) / t  # [Msun / Myrs] Stars lose mass due to stellar evolution. If it is the sole mechanism for mass loss, it implies that N is constant since mst decreases with the same rate.
+            rh_dot -= (Mval - 2) *  Mst_dotsev / M * rh # [pc / Myrs] The cluster expands for this reason. It is because a uniform distribution is assumed initially. 
         
         Mst_dot += Mst_dotsev  # [Msun / Myrs] Correct the total stellar mass loss rate. This way, resummation in rhdot is avoided.
    
@@ -1176,6 +1223,7 @@ class clusterBH:
         self.fcrun = self._fc(self.M, self.rh) # Parameter to estimate how the escape velocity evolves.
         self.beta_run = self.beta * self.beta_function(self.S) # Running beta factor.
         self.nu_run = numpy.maximum(self.nu_function(self.Z, sol.t), 0) # Running stellar mass loss rate.
+        self.sigma = sqrt(0.2 * self.G * self.M / self.rh) # Velocity dispersion in the cluster.
         
         # Check if the results need to be saved. The default option is to save the solutions of the differential equations as well as the tidal radius and average masses of the two components. Additional inclusions are possible.
         if self.output:
@@ -1189,11 +1237,11 @@ class clusterBH:
             # Write data
             numpy.savetxt(self.outfile, data, header=table_header, fmt="%12.5e", comments="")
 
+
 #######################################################################################################################################################################################################################################################
 """
 Notes:
 - Another set of values that can be used is:
-    zeta, beta, n, Rht, ntrh, b, Mval0, Mval_cc, S0 = 0.062, 0.077, 0.866, 0.046, 0.263, 2.2, 3.119, 3.855, 1.527
     zeta, beta, n, Rht, ntrh, b, Mval0, Mval_cc, S0 = 0.0977, 0.0566, 0.7113, 0.0633, 0.1665, 2.14, 3.1156, 3.1156, 1.96.
 
 - Functions _mstdot_ev, _balance and _fc are works in progress, currently deactivated or unused.
