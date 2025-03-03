@@ -188,7 +188,7 @@ class clusterBH:
         if (not (numpy.array_equal(self.a_slopes, self.a_kroupa)
                  and numpy.array_equal(self.m_breaks, self.m_kroupa))):
 
-            # Check if IMF and high mass slope/breaks
+            # Check if IMF high mass slope/breaks match Kroupa above 1Msun
             if ((self.a_slopes[-1] == self.a_kroupa[-1]) and numpy.array_equal(self.m_breaks[-2:], self.m_kroupa[-2:])):
 
                 self.nu_factor = 1 - self._sev_factor(self.a_kroupa, self.a_slopes, self.m_kroupa, self.m_breaks) # Approximate expression for auxiliary factor. It is inserted in the differential equations for Mst, mst
