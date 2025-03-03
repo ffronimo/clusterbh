@@ -165,11 +165,11 @@ class clusterBH:
        
         # Slopes of mass function.
         self.a_slopes = [-1.3, -2.3, -2.3]
-        self.a_kroupa = self.a_slopes # In case the user inserts a different set of slopes (and mass breaks), the stellar mass loss rate ν is different.
+        self.a_kroupa = self.a_slopes.copy() # In case the user inserts a different set of slopes (and mass breaks), the stellar mass loss rate ν is different.
 
         # Mass function break masses.
         self.m_breaks = [0.08, 0.5, 1., 150.]
-        self.m_kroupa = self.m_breaks
+        self.m_kroupa = self.m_breaks.copy()
 
         # Number of bins per interval of the mass function.
         self.nbins = [5, 5, 20]
@@ -183,10 +183,22 @@ class clusterBH:
                 setattr(self, key, value)
         
         self.nu_factor = 0 # Factor that corrects solution for Mst, mst for the case of a different IMF that has similar upper IMF with Kroupa. Default to 0.
-        if (self.m_breaks!=self.m_kroupa) and len(self.a_slopes)==len(self.a_kroupa) and len(self.m_breaks)==len(self.m_kroupa) and (self.m_breaks[-2]==self.m_kroupa[-2]) and (self.m_breaks[-1]==self.m_kroupa[-1]) and (self.a_slopes[-1]==self.a_kroupa[-1]) : # Check whether the IMF is similar to that of Kroupa. The last two mass breaks and the final slope must agree.
-           self.nu_factor = 1 - self._sev_factor(self.a_kroupa, self.a_slopes, self.m_kroupa, self.m_breaks) # Approximate expression for auxiliary factor. It is inserted in the differential equations for Mst, mst
-        # If the upper part of the IMF changes, tsev needs to change as well.
-        
+
+        # Check that this is not exactly a Kroupa IMF
+        if (not (numpy.array_equal(self.a_slopes, self.a_kroupa)
+                 and numpy.array_equal(self.m_breaks, self.m_kroupa))):
+
+            # Check if IMF high mass slope/breaks match Kroupa above 1Msun
+            if ((self.a_slopes[-1] == self.a_kroupa[-1]) and numpy.array_equal(self.m_breaks[-2:], self.m_kroupa[-2:])):
+
+                self.nu_factor = 1 - self._sev_factor(self.a_kroupa, self.a_slopes, self.m_kroupa, self.m_breaks) # Approximate expression for auxiliary factor. It is inserted in the differential equations for Mst, mst
+
+            # If the upper part of the IMF changes, tsev needs to change as well.
+            else:
+                import warnings
+                warnings.warn('IMF slope >1Msun is different than a Kroupa IMF, new stellar evolution rate cannot be automatically computed. '
+                              f'Using given {self.nu=}.')
+
         # Define models for stellar evolution. Coefficients can capture different dependences on metallicity, or an explicit dependence can be inserted.
         self.sev_dict={
             'constant': lambda Z, t: self.nu,
@@ -412,6 +424,8 @@ class clusterBH:
         integral1, integral2 = 0, 0
         for i in range(len(a_slopes1)):
             integral1 += norm_consts1[i] * integrate_IMF(m_breaks1[i], m_breaks1[i + 1], a_slopes1[i])
+
+        for i in range(len(a_slopes2)):
             integral2 += norm_consts2[i] * integrate_IMF(m_breaks2[i], m_breaks2[i + 1], a_slopes2[i])
         
         # Fraction of mass in the upper limit of the Kroupa.
