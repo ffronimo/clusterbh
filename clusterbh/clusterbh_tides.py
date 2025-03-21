@@ -3,6 +3,7 @@ import numpy
 from numpy import log, sqrt, pi, log10, exp, tanh
 from scipy.special import erf, hyp2f1
 from scipy.integrate import solve_ivp, cumulative_trapezoid
+import warnings
 numpy.seterr(invalid='ignore', divide='ignore')
 
 """
@@ -36,83 +37,90 @@ class clusterBH:
         
         # BHMF. It is needed only if the user does not use the available Simple Stellar Population (SSP) tools.
         # The current treatment for the BHMF is a simple power-law. At each iteration after core collapse, the BHMF is updated. The upper mass decreases with time, as dictated by Mbh.
-        self.f0 = 0.06 # Initial fraction of BHs. It decreases with metallicity and is important only when the SSP are not used.
+        self.f0 = 0.06 # Initial BH fraction. Decreases with metallicity and is important only when the SSP are not used.
         self.mlo = 3 # [Msun] Lowest BH mass in the BHMF.
         self.mup = 30 # [Msun] Upper BH mass in the BHMF
         self.mb = 0. # [Msun] Lowest mass unaffected by kicks. Default option is for no kicks. If kicks are activated, it is computed subsequently.
-        self.alpha_BH = 0.5 # Slope in the BHMF. If kicks are considered, the slope cannot be equal to -5 - 3k, where k is a positive integer. The special value of -2 (k=-1) is considered, but other values are not. These can be used, but without kicks.
+        self.alpha_BH = 0.5 # Slope in the BHMF. If kicks are considered, the slope cannot be equal to -5 - 3k, where k is a positive integer. The special value of -2 (k=-1) is considered, but other values are not. Can be used without kicks.
         self.fretm = 1 # Retention fraction of BHs. The default value neglects kicks. Changes the initial BH mass only trhough the prescription implemented in this script.
         self.t_bhcreation = 8 # [Myrs] Time required to create all BHs.
         self.N_points = 500 # Number of points used for even spacing.
         
         # Model parameters. 
         self.mns = 1.4 # [Msun] Mass of Neutron Stars (NS).
-        self.mst_inf = 1.4 # [Msun] The maximum upper mass for stars at infinity. It represents the mass of the remnants, typically near the limit for the heaviest white dwarf or lightest neutron star. It serves as the upper boundary for the average stellar mass.
+        self.mst_inf = 1.4 # [Msun] Maximum upper stellar mass at infinity. Serves as the upper boundary for the average stellar mass. Default value to stellar remnants, subject to change for IMFs that produce heavy stars.
         self.sigmans = 265 # [km/s] Velocity dispersion for NS. 
         self.gamma = 0.02 # Parameter for Coulomb logarithm.
-        self.S_crit = 0.0 # Critical value for Spitzer's parameter, below which the system reaches complete equipartition. Currently deactivated. 
-        self.Sf = 0.0 # Auxiliary value for Spitzer's parameter when equipartition is reached. It ensures the BH ejection rate stays finite and nonzero. It should be equal to or smaller than the critical value where full equipartition occurs. Currently deactivated.
-        self.x = 3./4 # Exponent used for finite escape time from Lagrange points.
-        self.r0 = 0.8 # Ratio of the half-mass radius over the Virial radius initially.
-        self.rf = 1 # Final value for ratio rh / rv. Used only if the option for the evolution of rh / rv with time is selected. 
-        self.tcross_index = 2 * sqrt(2 * pi / 3) # Prefactor for half-mass crossing time defined as tcr = index/sqrt(G ρ).
-        self.c = 10 # Parameter for exponential tides. Can be used for other tidal models available.
+        self.x = 3./4 # Exponent used for finite escape time from Lagrange points. Introduces energy dependece on evaporation time scale.
+        self.r0 = 0.8 # Ratio of the half-mass over virial radius initially.
+        self.rf = 1 # Final value for rh / rv. Used only if the option for the evolution of rh / rv with time is activated. 
+        self.tcross_index = 2 * sqrt(2 * pi / 3) # Prefactor for half-mass crossing time defined as tcr = 1/sqrt(G ρ).
         self.c_bh = 10 # Exponent for tides used in the BH evaporation rate. Currently deactivated. Used for describing the impact of the tidal field on the BH population. 
-        self.rp = 0.8 # [kpc] Constant parameter for galactic potentials. It serves as an effective scale.
-        self.rpc = 1 # [pc] Constant parameter for cluster potentials, for instance Plummer. Also an effective scale.
+        self.rp = 0.8 # [kpc] Constant parameter for galactic potentials. Serves as an effective scale.
+        self.rpc = 1 # [pc] Constant parameter for cluster potentials. Also an effective scale.
         self.fmin = 0 # Constant evaporation rate. Can be used in order to have a constant evaporation rate for cases where the ratio rh / rt is not strong enough. Currently deactivated.
+        self.Scrit = 0 # Constant value below which Spitzer's parameter is kept fixed. Facilitates ejection of last few BHs if a varying ejection rate is selected.
         
         # This part includes parameters that are on trial, intended for future additions. Some may be subjects to future fittings.
-        #_____________________________________________
-        self.gamma1 = 3 / 2 # Exponent for the evaporation rate in the rotational component. Default value keeps the ratio of xi to trh constant, with changes affecting only the evolution of rh.
+        #_________________________________________________
+        self.gamma1 = 3 / 2 # Exponent for the evaporation rate in the rotational component. Default value keeps the ratio of xi over trh constant, with changes affecting only the evolution of rh.
         self.gamma2 = 1 # Parameter used for describing the BH ejection rate. Applies to extended options.
         self.gamma3 = 3 # Constant used in the balance function. Currently deactivated.
         self.gamma4 = 2 # Second constant for the balance function, working with gamma3 to smoothly connect the two phases.
-        self.c1 = 0 # Parameter for stellar evolution. Can be used for a time dependent ν.
-        self.c2 = 0 # Second parameter for stellar evolution. 
-        self.d1 = 0.18 # First exponent to describe the evolution of parameter fc. Can be used in order to specify how W0 evolves for a given cluster as function fo M and rh.
+        self.c1 = 0.1 # Parameter for stellar evolution. Can be used for a age dependent ν.
+        self.c2 = 0.03 # Second parameter for stellar evolution. 
+        self.d1 = 0.18 # First exponent to describe the evolution of parameter fc. Can be used to specify how W0 evolves for a given cluster as function fo M and rh.
         self.d2 = 0.14 # Second exponent to describe the evolution of parameter fc.
-        self.chi = 0. # Prefactor that adjusts the average stellar mass with respect to tides, particularly important for small galactocentric distances.
-        self.Rht_crit = 0.3 # Critical value of ratio rh / rt above which induced mass-loss from stellar evolution should be considered.
+        self.chi_ev = 0. # Prefactor that adjusts the average stellar mass with respect to tides, important for small galactocentric distances.
+        self.chi_ej = 0 # Prefactor used for decreasing the average stellar mass due to ejections.
+        self.chi_gmc = 0 # Prefactor used for increasing the average stellar mass from interactions with GMC if chosen.
+        self.find_max = 0.8 # Maximum index for induced mass loss.
+        self.Rht_crit = 0.3 # Critical ratio of rh /rt for induced mass loss. It describes Rv filling clusters.
+        self.n_delay = 3 # Delay factor for induced mass loss. Connects delay time with crossing time.
+        self.k_bh = 1 # Parameter used for properly extracting average mass that is evaporated. Can be used for large BH fractions.
+        self.gamma_n = 0.62 # Exponent for interaction of the cluster with GMCs.
+        self.Sigma_n = 170 # [Msun / pc^2] Surface density in the solar neighborhood. Used for interactions with GMCs.
+        self.rho_n = 0.03 # [Msun / pc^3] Total density of GMC in the solar neighborhood.
         #_________________________________________________
         
         # Parameters fitted to N-body / Monte Carlo models.
-        self.zeta = 0.085 # Energy loss per half-mass relaxation. It is assumed to be constant.
-        self.beta = 0.0638 # BH ejection rate from the core per relaxation, considered constant for all clusters, assuming a large BH population in the core, regardless of initial conditions. Shows the efficiency of ejections. Subjects to change in the following functions.
-        self.nu = 0.072 # Mass loss rate of stars due to stellar evolution. It is the same for all clusters and does not depend on metallicity. Changes can be applied in the following functions.
+        self.zeta = 0.0914 # Energy loss per half-mass relaxation. It is assumed to be constant.
+        self.beta = 0.0672 # BH ejection rate from the core per relaxation, considered constant for all clusters, assuming a large BH population in the core, regardless of initial conditions. Shows the efficiency of ejections. Subjects to change in the following functions.
+        self.nu = 0.068 # Mass loss rate of stars due to stellar evolution. It is the same for all clusters and does not depend on metallicity. Changes can be applied in the following functions.
         self.tsev = 1 # [Myrs]. Time instance when stars start evolving. Typically it should be a few Myrs.
         self.a0 = 1 # Fix zeroth order in ψ, if approximations are made. In reality, it serves as the contribution of the stellar population to the half-mass mass spectrum.
-        self.a11 = 1.94 # First prefactor in ψ. Relates the BH mass fraction within the half-mass to the total fraction.
-        self.a12 = 0.634 # Second prefactor in ψ. Relates the mass ratio of BHs over the total average mass, within the half-mass radius and the total. It is the product of a11 and a12 that matters in the following computations.
-        self.a3 = 0.984 # [Msun] Prefactor of average mass within the half-mass radius compared to the total. The values of a11, a12 and a3 are taken for clusters with large initial relaxations.
-        self.n = 1.6222 # Exponent in the power-law parametrization of tides. It determines how quickly the Virial radii lose mass. Its value relative to 1.5 indicates the rate at which mass is lost.
-        self.Rht = 0.113 # Ratio of rh/rt, used to calculate the correct mass loss rate due to tides. It serves as a reference scale, not necessarily representing the final value of rh/rt.
-        self.ntrh = 1.0967 # Number of initial relaxations to compute core collapse instance. Marks also the transition from the unbalanced to the balanced phase.
+        self.a11 = 2 # First prefactor in ψ. Relates the BH mass fraction within the half-mass to the total fraction.
+        self.a12 = 0.5769 # Second prefactor in ψ. Relates the mass ratio of BHs over the total average mass, within the half-mass radius and the total. It is the product of a11 and a12 that matters in the following computations.
+        self.a3 = 1 # [Msun] Prefactor of average mass within the half-mass radius compared to the total. The values of a11, a12 and a3 are taken for clusters with large initial relaxations.
+        self.n = 3.34 # Exponent in the power-law parametrization of tides. It determines how quickly the Virial radii lose mass. Its value relative to 1.5 indicates the rate at which mass is lost.
+        self.c = 1 / 0.0622 # Parameter for exponential tides. Can be used for other tidal models available.
+        self.Rht = 0.1829 # Ratio of rh/rt, used to calculate the correct mass loss rate due to tides. It serves as a reference scale, not necessarily representing the final value of rh/rt.
+        self.ntrh = 0.9627 # Number of initial relaxations to compute core collapse instance. Marks also the transition from the unbalanced to the balanced phase.
         self.alpha_ci = 0.0 # Initial ejection rate of stars, when BHs are present. Currently deactivated, as it only accounts for a small percentage of the total stellar mass loss each relaxation.
         self.alpha_cf = 0.0 # Final ejection rate of stars, when all BHs have been ejected (or the final binary remains) and the stellar density increases in the core. Represented by different values, but in principle they may be equal.
         self.kin = 1 # Kinetic term of evaporating stars. Used to compute the energy carried out by evaporated stars. The deafult value neglects this contribution. The case of a varying value is available in later parts.
-        self.b = 2.14 # Exponent for parameter ψ. The choices are between 2 and 2.5, the former indicating equal velocity dispersion between components while the latter complete equipartition.
-        self.b_min = 2 # Minimum exponent for parameter ψ. Can be used when the exponent in ψ is varying with the BH fraction.
-        self.b_max = 2.5 # Maximum exponent for parameter ψ. Taken from Wang (2020), can be used for the case of a running exponent b.
+        self.b = 0.25 # Exponent for parameter ψ. The choices are between 2 and 2.5, the former indicating equal velocity dispersion between components while the latter complete equipartition.
+        self.b_min = 0 # Minimum exponent for parameter ψ. Can be used when the exponent in ψ is varying with the BH fraction.
+        self.b_max = 0.5 # Maximum exponent for parameter ψ. Taken from Wang (2020), can be used for the case of a running exponent b.
         self.b0 = 2 # Exponent for parameter ψ. It relates the fraction mst / m (average stelar mass over average mass) within rh and the total fraction.
         self.b1 = 1 # Correction to exponent of fbh in parameter ψ. It appears because the properties within the half-mass radius differ.
-        self.b2 = 1.04 # Exponent of fraction mbh / m (average BH mass over average mass) in ψ. Connects properties within rh with the global. Current value is used for sparse clusters.
-        self.b3 = 0.96 # Exponent of average mass within rh compared to the global average mass. All exponents are considered for the case of clusters with large relaxation.
+        self.b2 = 1.0 # Exponent of fraction mbh / m (average BH mass over average mass) in ψ. Connects properties within rh with the global. Current value is used for sparse clusters.
+        self.b3 = 1.0 # Exponent of average mass within rh compared to the global average mass. All exponents are considered for the case of clusters with large relaxation.
         self.b4 = 0.17 # Exponent for the BH ejection rate. Participates after a critical value, here denoted as fbh_crit.
-        self.b5 = 0.4 # Second exponent for the BH ejection rate. Participates after a critical value for the BH fraction, here denoted as qbh_crit. It is deactivated for now.
-        self.Mval0 = 3.1187 # Initial value for mass segregation. For a homologous distribution of stars, set it equal to 3.
-        self.Mvalf = 3.1187 # Final parameter for mass segregation. Describes the maximum value for the level of segregation. It is universal for all clusters and appears at the moment of core collapse.
+        self.b5 = 0 # 0.4 # Second exponent for the BH ejection rate. Participates after a critical value for the BH fraction, here denoted as qbh_crit. It is deactivated for now.
+        self.Mval0 = 3.426 # Initial value for mass segregation. For a homologous distribution of stars, set it equal to 3.
+        self.Mvalf = 3.426 # Final parameter for mass segregation. Describes the maximum value for the level of segregation. It is universal for all clusters and appears at the moment of core collapse. Currently deactivated.
         self.p = 0.1 # Parameter for finite time stellar evaporation from the Lagrange points. Relates escape time with relaxation and crossing time. 
         self.fbh_crit = 0.005 # Critical value of the BH fraction to use in the ejection rate of BHs. Decreases the fractions E / M φ0 properly, which for BH fractions close/above O(1)% approximately can be treated as constant.
         self.qbh_crit = 25 # Ratio of mbh / m when the BH ejection rate starts decreasing. Also for the ratio E / M φ0, however now it is deactivated. Should introduce an effective metallicity dependence.
-        self.S0 = 1.7247 # Parameter used for describing BH ejections when close to equipartition. Useful for describing clusters with different metallicities using the same set of parameters, as well as for clusters with small BH populations which inevitably slow down the ejections to some extend.
+        self.S0 = 0.6283 # Parameter used for describing BH ejections when close to equipartition. Useful for describing clusters with different metallicities using the same set of parameters, as well as for clusters with small BH populations which inevitably slow down the ejections to some extend.
         self.gamma_exp = 10 # Parameter used for obtaining the correct exponent for parameter ψ as a function of the BH fraction. Uses an exponential fit to connect minimum and maximum values of b.
         
         # Integration parameters.
         self.tend = 13.8e3 # [Myrs] Final time instance for inegration. Here taken to be a Hubble time.
-        self.dtout = 2 # [Myrs] Time step for integration. Default to a few Myrs. It is not required, can be set equal to None.
+        self.dtout = 2 # [Myrs] Time step for integration. If None, computations are faster. 
         self.Mst_min = 100 # [Msun] Stop criterion for stars. Below this value, the integration stops.
-        self.Mbh_min = 500 # [Msun] Stop criterion for BHs. Below this value the integration stops. The integrator stops only if both the stellar option is selected and the specified conditions are met.
+        self.Mbh_min = 550 # [Msun] Stop criterion for BHs. Below this value the integration stops. The integrator stops only if both the stellar option is selected and the specified conditions are met.
         self.integration_method = "RK45" # Integration method. Default to a Runge-Kutta.
         self.vectorize = False # Condition for solve_ivp. Solves faster coupled differential equations when the derivatives are arrays.
         self.dense_output = True # Condition for solve_ivp to give continuous solution. Facilitates interpolation. Can be used instead of specifying t_eval.
@@ -125,20 +133,24 @@ class clusterBH:
         # Conditions.
         self.ssp = True # Condition to use the SSP tools to extract the BHMF at any moment. Default option uses such tools. 
         self.sev = True # Condition to consider effects of stellar evolution. Affects total mass and expansion of the cluster. Default option considers stellar evolution.
+        self.sev_tune = True # Condition to consider changes in the sev parameters should the user insert an IMF different than a Kroupa. Default option to True. If false, the user can insert a different IMF with different set of parameters.
         self.kick = True # Condition to include natal kicks. Affects the BH population obtained. Default option considers kicks.
         self.tidal = True # Condition to activate tides. Default option considers the effect of tides.
         self.escapers = False # Condition for escapers to carry negative energy as they evaporate (only) from the cluster due to the tidal field. Affects mainly the expansion of sparse clusters at small galactocentric distances. Default option is deactivated.
         self.varying_kin = False # Condition to include a variation of the kinetic term with the number of stars. It is combined with 'escapers'. Default option is deactivated.
         self.two_relaxations = True # Condition to have two relaxation time scales for the two components. Differentiates between ejections and evaporation. Default option is activated.
         self.mass_segregation = False # Condition for mass segregation. If activated, parameter Mval evolves from Mval0 up until Mvalf within one relaxation. Default option is deactivated.
-        self.Virial_evolution = False # Condition to consider different evolution for the Virial radius from the half-mass radius within one relaxation. Default option is deactivated.
-        self.psi_exponent_run = False # Condition to have a running exponent in parameter ψ based on the BH fraction. Default option is deactivated.
+        self.virial_evolution = False # Condition to consider different evolution for the Virial radius from the half-mass radius within one relaxation. Default option is deactivated.
+        self.sigma_exponent_run = False # Condition to have a running exponent in velocity dispersion based on the BH fraction. Default option is deactivated.
         self.finite_escape_time = False # Condition to implement escape from Lagrange points for stars which evaporate. Introduces an additional dependence on the number of particles on the tidal field, prolongs the lifetime of clusters. Default option is deactivated.
         self.running_bh_ejection_rate_1 = True # Condition for decreasing the ejection rate of BHs due to varying E / M φ0. Default option considers the effect of decreasing fbh only. Currently activated.
         self.running_bh_ejection_rate_2 = True # Condition for decreasing the ejection rate of BHs due to equipartition. Uses a smooth function for decreasing the BH ejection efficiency. Currently activated.
         self.running_stellar_ejection_rate = False # Condition for changing the stellar ejection rate compared to the tidal field. Currently deactivated.
         self.rotation = False # Condition to describe rotating clusters. Currently it is inserted as a simple extension, more study is required. It is deactivated.
         self.dark_clusters = False # Condition for describing dark clusters (stellar population depletes first). When used, the approximations in ψ are not used. It is regarded as future extension and needs to be augmented. Currently it is deactivated
+        self.induced_loss = False # Condition to study induced mass loss for RV filling star clusters. Currenly deactivated, surves as a future extension.
+        self.GMC = False # Condition to allow for interaction with Giant Molecular Clusters.
+        self.tidal_spiraling = False # Condition to assume tidal spiraling of the cluster.
         
         # Stellar evolution model. Used for selecting a model for ν.
         self.sev_model = 'constant' # Default option is constant mass loss rate.
@@ -150,7 +162,7 @@ class clusterBH:
         self.galactic_model, self.rt_index = 'SIS', 2 # Default to 'SIS'. Affects the tidal radius. 
         
         # Tidal model. Used for specifying the evaporation rate ξ.
-        self.tidal_model = 'Power_Law' # Default to 'Power_Law'. Affects tidal mass loss and thus the evolution of the half-mass radius.
+        self.tidal_model = 'Exponential' # Default to 'Exponential'. Affects tidal mass loss and thus the evolution of the half-mass radius.
         
         # Cluster model. Used for specifying the potential of the cluster.
         self.cluster_model = 'Point_mass' # Default to 'Point_mass'. Currently it affects only the energy contribution of evaporating stars, if activated.
@@ -159,7 +171,7 @@ class clusterBH:
         self.beta_model = 'exponential' # Default option to the exponential model. Affects the dependence of the BH ejection rate on Spitzer's parameter and thus the extrapolation to small BH populations or large metallicity clusters.
         
         # Balance model. It can be used for a smooth connection of the unbalanced phace with post core collapse.
-        self.balance_model = 'error_function' # Default option to error function. Uses a function in order to smoothly connect the unbalanced phase to post core collapse. Serves as a future implementation to make the differential equations continuous.
+        self.balance_model = 'step' # Default option to heaviside. Uses a function in order to smoothly connect the unbalanced phase to post core collapse. Other options can make the differential equations continuous.
         
         # Pass in lists for a_slopes, m_breaks and nbins. Any number of IMF intervals, based on size of lists. m_breaks must be size N+1
        
@@ -169,7 +181,7 @@ class clusterBH:
 
         # Mass function break masses.
         self.m_breaks = [0.08, 0.5, 1., 150.]
-        self.m_kroupa = self.m_breaks.copy()
+        self.m_kroupa = self.m_breaks.copy() # The user can insert different masses. The slopes and mass breaks of the Kroupa should not change.
 
         # Number of bins per interval of the mass function.
         self.nbins = [5, 5, 20]
@@ -182,43 +194,40 @@ class clusterBH:
             for key, value in kwargs.items():
                 setattr(self, key, value)
         
-        self.nu_factor = 0 # Factor that corrects solution for Mst, mst for the case of a different IMF that has similar upper IMF with Kroupa. Default to 0.
+        self.nu_factor = 0 # Factor that corrects solution for Mst, mst for the case of a different IMF that has similar upper part with Kroupa. Default to 0.
+        # Check that this is not exactly a Kroupa IMF.
+        if (not (numpy.array_equal(self.a_slopes, self.a_kroupa) and numpy.array_equal(self.m_breaks, self.m_kroupa))) and self.sev_tune:
 
-        # Check that this is not exactly a Kroupa IMF
-        if (not (numpy.array_equal(self.a_slopes, self.a_kroupa)
-                 and numpy.array_equal(self.m_breaks, self.m_kroupa))):
+           # Check if IMF high mass slope/breaks match Kroupa above 1Msun
+           if ((self.a_slopes[-1] == self.a_kroupa[-1]) and numpy.array_equal(self.m_breaks[-2:], self.m_kroupa[-2:])):
 
-            # Check if IMF high mass slope/breaks match Kroupa above 1Msun
-            if ((self.a_slopes[-1] == self.a_kroupa[-1]) and numpy.array_equal(self.m_breaks[-2:], self.m_kroupa[-2:])):
-
-                self.nu_factor = 1 - self._sev_factor(self.a_kroupa, self.a_slopes, self.m_kroupa, self.m_breaks) # Approximate expression for auxiliary factor. It is inserted in the differential equations for Mst, mst
-
-            # If the upper part of the IMF changes, tsev needs to change as well.
-            else:
-                import warnings
-                warnings.warn('IMF slope >1Msun is different than a Kroupa IMF, new stellar evolution rate cannot be automatically computed. '
-                              f'Using given {self.nu=}.')
-
+               self.nu_factor = 1 - self._sev_factor(self.a_kroupa, self.a_slopes, self.m_kroupa, self.m_breaks) # Approximate expression for auxiliary factor. It is inserted in the differential equations for Mst, mst.
+               # Possibly a relation for tsev with M may be derived, such that for maximum M lower than the Maximum Kroupa mass, it increases. 
+           # If the upper part of the IMF changes, tsev needs to change as well.
+           else:
+               warnings.warn('IMF slope > 1Msun is different than a Kroupa IMF, new stellar evolution rate cannot be automatically computed. '
+                             f'Using given {self.nu=}.')
+               
         # Define models for stellar evolution. Coefficients can capture different dependences on metallicity, or an explicit dependence can be inserted.
         self.sev_dict={
-            'constant': lambda Z, t: self.nu,
-            'exponential': lambda Z, t: self.nu * exp (- self.c1 * ((t - self.tsev) / self.tsev) ** self.c2),
-            'power_law': lambda Z, t: self.nu / (1 + self.c1 * ((t - self.tsev) / self.tsev) ** self.c2),
-            'logarithmic': lambda Z, t: self.nu * (1 + self.c1 * log(t / self.tsev) - self.c2 * log(t / self.tsev) ** 2)
+            'constant': lambda Z, t: self.nu, # M(t) is a power-law.
+            'power_law': lambda Z, t: self.nu * (t / self.tsev) ** (- self.c1), # M(t) is exponential
+            'exponential': lambda Z, t: self.nu * exp(-self.c1 * t / self.tsev), # M(t) depends on exponential integral Ei.
+            'logarithmic': lambda Z, t: self.nu * (1 + self.c1 * log(t / self.tsev) - self.c2 * log(t / self.tsev) ** 2) # M(t) is power-law products.
         }
         
         # Galactic properties.
-        self.Mg = 1.023 ** 2 * self.Vc ** 2 * self.rg * 1e3 / self.G # [Msun] Mass of the galaxy inside the orbit of the cluster. It is derived from orbital properties.
+        self.Mg = 1.023 ** 2 * self.Vc ** 2 * self.rg * 1e3 / self.G # [Msun] Mass of the galaxy inside the orbit of the cluster. Derived from orbital properties.
         self.L = 1.023 * self.Vc * self.rg * 1e3 # [pc^2 / Myrs] Orbital angular momentum.
         
         # Define the tidal models dictionary.
         self.tidal_models = { # Both the half-mass and the tidal radius should be in [pc]. All the rest parameters are fixed. In a different scenario, they should be treated as variables.
-            'Power_Law': lambda rh, rt: 3 * self.zeta / 5 * (rh / rt / self.Rht) ** self.n, 
-            'Exponential': lambda rh, rt: 3 * self.zeta / 5 * exp(self.c * rh / rt)
+            'Power_Law': lambda rh, rt: 3 * self.zeta / 5 * (rh / rt / self.Rht) ** self.n, # Simple insertion. The case of n=1.5 suggests \dot Mst is independend of half-mass radius.
+            'Exponential': lambda rh, rt: 3 * self.zeta / 5 * self.Rht * exp(self.c * rh / rt) # General formula. The evaporation rate is constant for dense clusters.
         }
         
         # Galactic model dictionary.
-        self.galactic_model_dict = { # Dictionary for spherically symmetric galactic potentials. A model can be selected from the dictionary. The index is used for the tidal radius only and it is dimensionless. The potential has units are [pc^2 / Myr^2]. Radius should be in [kpc], mass in [Msun].
+        self.galactic_model_dict = { # Dictionary for spherically symmetric galactic potentials. The index is used for the tidal radius only and it is dimensionless. The potential has units are [pc^2 / Myr^2]. Radius should be in [kpc], mass in [Msun].
             'SIS': {'rt_index':2 , 'phi':lambda r, Mg: self.Vc ** 2 * log(r / self.rp)}, # Singular isothermal sphere. It is the default.
             'Point_mass': {'rt_index':3, 'phi': lambda r, Mg: - 1e-3 * self.G * Mg / r }, # Point mass galaxy.
             'Hernquist': {'rt_index':(3 * self.rg + self.rp) / (self.rg + self.rp), 'phi': lambda r, Mg: - 1e-3 * self.G * Mg / (r + self.rp) },  # Hernquist model.
@@ -239,17 +248,18 @@ class clusterBH:
             'Isochrone': lambda r, M: - self.G * M / (self.rpc + sqrt(r ** 2 + self.rpc ** 2))
         }
         
-        # Dictionary that introduces a scaling on the BH ejection rate with respect to Spitzer's paramater. Can be used as a proxy for different parametrizations as well.
+        # The dictionary is subject to change, should a better description be found.
+        # Dictionary that introduces a scaling on the BH ejection rate with respect to Spitzer's paramater. Can be used as a proxy for different parametrizations as well. Can be used for describing equipartition.
         self.beta_dict = {
            'exponential': lambda S: 1 - exp(- (S / self.S0) ** self.gamma2),
-           'logistic1': lambda S: (S / (S + self.S0)) ** self.gamma2,
-           'logistic2': lambda S: (S ** self.gamma2 / (S ** self.gamma2 + self.S0 ** self.gamma2)),
-           'error_function': lambda S:  erf((S + self.S_crit) / self.S0),
-           'hyperbolic': lambda S: tanh((S + self.S_crit) / self.S0)
+           'logistic': lambda S: (S ** self.gamma2 / (S ** self.gamma2 + self.S0 ** self.gamma2)),
+           'error_function': lambda S:  erf(S / self.S0),
+           'hyperbolic': lambda S: tanh(S / self.S0)
         }
         
-        # Dictionary for balancing functions. It is currently on trial stage and is not used. Functions must be 0 at t=0 and for initial times, and 1 at tcc<=t.
+        # Dictionary for balancing functions. Functions must be 0 at t=0 and for initial times, and 1 at tcc<=t. Default to step like.
         self.balance_dict = {
+            'step':lambda t: numpy.heaviside(t - self.tcc, 1),
             'error_function':lambda t:  0.5 * (1 + erf(self.gamma4 * self.gamma3 * (t - self.gamma4 * self.tcc / self.gamma3 ) / self.tcc)) ,
             'hyperbolic': lambda t: 0.5 * (1 + tanh(self.gamma3 * self.gamma4 * (t - self.gamma4 * self.tcc / self.gamma3) / self.tcc)),
             'exponential': lambda t: 1 - exp(- self.gamma3 * (t / self.tcc) ** self.gamma4)
@@ -284,7 +294,7 @@ class clusterBH:
         else:
             self.t_eval = numpy.arange(0, self.tend, self.dtout) # Area for integration.
         
-        self.mst_sev, self.t_mst = self._mst_sev() # [Msun] Solution for average stellar mass if stellar evolution is considered solely. Time is kept for interpolation.
+        self.mst_sev, self.t_mst = self._mst_sev() # [Msun, Myrs] Solution for average stellar mass if stellar evolution is considered solely. Time is kept for interpolation.
         
         # Check whether SSP are used for the BHMF.
         if self.ssp:
@@ -297,7 +307,7 @@ class clusterBH:
             self.Mbh0 = self.ibh.Mtot  # [Msun] Expected initial mass of BHs.
             self.f0 = self.Mbh0 / self.M0 # Initial fraction of BHs. Should be close to 0.06 for poor-metal clusters. 
             
-            self.Nbh0 = numpy.round(self.ibh.Ntot).astype(int) # Initial number of BHs. Round the number for consistency.
+            self.Nbh0 = self.ibh.Ntot # Initial number of BHs. Round the number for consistency.
             self.mbh0 = self.Mbh0 / self.Nbh0 # [Msun] Initial average BH mass.
             self.mlo = self.ibh.m.min() # [Msun] Minimum BH mass in the BHMF.
             self.mup = self.ibh.m.max() # [Msun] Maximum BH mass in the BHMF.
@@ -369,8 +379,9 @@ class clusterBH:
             self.mst_sev_BH = numpy.interp(self.t_bhcreation, self.t_mst, self.mst_sev) # [Msun] Average stellar mass when all BHs are created. Effect of tides is neglected for simplicity.
             self.Mst_lost = (self.m0 - self.mst_sev_BH) * N # [Msun] Approximate value for the stellar mass lost to create all BHs.
         
+        if self.Mbh0 < self.mlo: self.Mbh0, self.mbh0, self.Nbh0 = 0, 1e-99, 0 # This condition checks whether BHs will be created. If not, clusterBH works only with stars.
         # Initial relaxation is extracted with respect to the BH population that will be obtained. It is an approximation such that large metallicity clusters have larger relaxation, as expected. This approach inserts an indirect metallicity dependence.
-        self.psi0 = self._psi(self.Mbh0 / (self.M0 + self.Mbh0 - self.Mst_lost), self.M0 + self.Mbh0 - self.Mst_lost, self.mbh0, self.mst_sev_BH) # Use as time instance the moment when all BHs are formed. In this regime, tides are not so important so all the mass-loss comes from stellar evolution. 
+        self.psi0 = self._psi(self.Mbh0 / (self.M0 + self.Mbh0), self.M0 + self.Mbh0, self.mbh0, self.m0) # Use as time instance the moment when all BHs are formed. In this regime, tides are not so important so all the mass-loss comes from stellar evolution. 
         self.trh0 = 0.138 / (self.m0 * self.psi0 * log(self.gamma * self.N)) * sqrt(self.M0 * self.rh0 ** 3 / self.G ) * (1 - 2 * self.omega0 ** 2 * self.rh0 ** 3 / (self.G * self.M0)) ** (3 / 2) # [Myrs] We use m0 since at t=0 the mass distribution is the same everywhere.
         self.tcc = self.ntrh * self.trh0 # [Myrs] Core collapse. Effectively it depends on metallicity, size and mass of the cluster.
         
@@ -393,34 +404,63 @@ class clusterBH:
         self.xi_function = self.tidal_models[self.tidal_model]
         self.beta_function = self.beta_dict[self.beta_model]
         self.cluster_model_function = self.cluster_model_dict[self.cluster_model]
-       
+        self.balance_function = self.balance_dict[self.balance_model]
+        
         self._evolve(N, rhoh) # Runs the integrator, generates the results.
+        
+    # Functions:
 
     def _sev_factor(self, a_slopes1, a_slopes2, m_breaks1, m_breaks2):
-            
+        """
+        Computes the scaling factor between two different IMFs
+        by normalizing and integrating them over the given mass ranges.
+        
+        This function first determines normalization constants to ensure IMF continuity,
+        then integrates each IMF to compute their total mass, and finally calculates 
+        the fraction of mass in the high-mass end of the second IMF relative to the first.
+        
+        Parameters
+        ----------
+        a_slopes1 : list of float
+            The power-law slopes for the first IMF.
+        a_slopes2 : list of float
+            The power-law slopes for the second IMF.
+        m_breaks1 : list of float
+            The mass breakpoints corresponding to `a_slopes1`. [Msun]
+        m_breaks2 : list of float
+            The mass breakpoints corresponding to `a_slopes2`. [Msun]
+        
+        Returns
+        -------
+        float
+            The ratio of the two IMFs' total mass, adjusted by the mass fraction 
+            in the upper limit of the second IMF relative to the first. First IMF is the Kroupa.
+        """
+        
         def integrate_IMF(m_low, m_high, p):
-            if p == -2:  # Handle special case where p = -2 to avoid division by zero
+            if p == -2:  # Handles special case where p = -2 to avoid division by zero.
                 return log(m_high / m_low)
             else:
                 return (m_high ** (p + 2) - m_low ** (p + 2)) / (p + 2)
-
+        
+        # Normalization constants make the IMF continuous.
         def norm_constants(a_slopes, m_breaks):
-            c_values = [1.0]  # c1 = 1.0 (initial normalization)
+            c_values = [1.0]  # c1 = 1.0 (initial normalization). Does not matter.
             norm_constants = []
         
             for i in range(1, len(a_slopes)):
-                c_values.append(m_breaks[i] ** (a_slopes[i - 1] -a_slopes[i]))
+                c_values.append(m_breaks[i] ** (a_slopes[i - 1] - a_slopes[i]))
         
             for i in range(len(c_values)):
                 norm_constants.append(numpy.prod(c_values[:i+1]))
         
             return norm_constants
     
-        # Compute normalization constants for both sets of slopes
+        # Compute normalization constants for both sets of slopes.
         norm_consts1 = norm_constants(a_slopes1, m_breaks1)
         norm_consts2 = norm_constants(a_slopes2, m_breaks2)
         
-        # Compute the integral for both IMF sets.
+        # Compute the integrals for both IMF sets. They denote the total mass.
         integral1, integral2 = 0, 0
         for i in range(len(a_slopes1)):
             integral1 += norm_consts1[i] * integrate_IMF(m_breaks1[i], m_breaks1[i + 1], a_slopes1[i])
@@ -435,11 +475,10 @@ class clusterBH:
         # Return the ratio of the two integrals.
         return r * integral1 / integral2
 
-    
     # Compute initial average mass.
     def _initial_average_mass(self, a_slopes, m_breaks):
        """
-       Calculate the initial average mass of stars based on a piecewise power-law IMF.
+       Calculates the initial average mass of stars based on a piecewise power-law IMF.
     
        Parameters:
        -----------
@@ -468,19 +507,19 @@ class clusterBH:
               return (m_high ** (p + 1) - m_low ** (p + 1)) / (p + 1)
        
        # Normalization constants to ensure continuity of the IMF.
-       c_values = [1.0]  # c1 = 1.0
+       c_values = [1.0]  # c1 = 1.0. First is irrelevant.
        normalization_constants = []
        
        # Calculate the rest of the c values based on slopes and mass breakpoints. This is for continuity.
        for i in range(1, len(a_slopes)):
            c_values.append(m_breaks[i] ** (a_slopes[i - 1] - a_slopes[i])) # Previous exponent minus current one, to compute the current prefactor.
 
-       # Compute the cumulative products to form the normalization_constants array.
+       # Compute the cumulative products to form the normalization_constants array. Ensures continuity.
        for i in range(len(c_values) - 1):
          normalization_constants.append(c_values[i] * c_values[i + 1]) # For every prefactor, we need to take the product with the previous one. We have 2 breakpoints in 1 interval.
        
       # The prefactors are dimensionless here, if a normalization to 1Msun is assumed in the power-laws.
-       normalization_constants.insert(0, c_values[0]) # First entry is 1. It does not matter because the normalized prefactors are essentially conputed.
+       normalization_constants.insert(0, c_values[0]) # First entry is 1. 
        
        # Set initial values to 0.
        stellar_mass = 0 
@@ -499,12 +538,13 @@ class clusterBH:
           stellar_number += c_i * integrate_IMF(m_low, m_high, a)
     
        # Calculate the average mass. A well defined IMF should have a nonzero denominator.
-       return stellar_mass / stellar_number
+       return stellar_mass / stellar_number # [Msun]
     
     # Function to determine by how much the BHMF changes, given a particular mass loss.
     def _deplete_BHMF(self, M_eject, M_BH, N_BH):
         """
-        Deplete the BHMF by ejecting mass starting from the heaviest bins. This is subject to change once dark clusters are considered. For the time being, it suffices.
+        Depletes the BHMF by ejecting mass starting from the heaviest bins. This is subject to change once dark clusters are considered.
+        Possible extension. Insert M_eject and also the type. Ejections are subtracted top-down while evaporation bottom-up.
     
         Parameters:
          -----------
@@ -596,7 +636,7 @@ class clusterBH:
     # Average BH mass.
     def _mbh(self, Mbh):
         """
-        Calculate the updated average BH mass after ejecting a specified amount of BH mass. 
+        Calculates the updated average BH mass after ejecting a specified amount of BH mass. 
         The computation is done based on which BHMF is used (either from the SSP or a simple power-law specified by the user).
     
         Parameters:
@@ -637,17 +677,19 @@ class clusterBH:
             # Perform the integration. Assume a power-law BHMF, corrected for kicks. If kicks are deactivated, mb=0 by default. For a different model instead of power-law, the integrands change but also the routine for kicks in _find_mmax.
          
             return numerator / numpy.maximum(denominator, 1e-99) # [Msun]
-            return numerator / numpy.maximum(denominator, 1e-99) # [Msun]
-       
+           
     # Tidal radius. Applies for any orbit on spherically symmetric potentials. If axisymmetric are used, a different prescription is needed.
-    def _rt(self, M): 
+    def _rt(self, M, RG): 
         """
-        Calculate the tidal radius of a star cluster based on its mass and orbital properties.
+        Calculates the tidal radius of a star cluster based on its mass and orbital properties.
 
         Parameters:
         -----------
         M : float
            Total mass of the cluster [Msun].
+           
+        RG : float
+            Galactocentric distance [kpc].
 
         Returns:
         --------
@@ -661,7 +703,7 @@ class clusterBH:
         """
         
         # Angular velocity squared.
-        O2 = (self.Vc * 1.023 / (self.rg * 1e3)) ** 2 # [ 1 / Myrs^2]
+        O2 = (self.Vc * 1.023 / (RG * 1e3)) ** 2 # [ 1 / Myrs^2]
         
         # Tidal radius.
         rt = (self.G * M / (self.rt_index * O2)) ** (1./3) # [pc] The expression is valid as long as the potential is spherically symmetric, regardless of the orbit.
@@ -696,11 +738,31 @@ class clusterBH:
        
         # Return the value of mst and time as arrays. The latter will be used for interpolation.
         return sol.y[0], sol.t
+    
+    # Exponent connecting velocity dispersion to mass.
+    def _b(self, fbh):
+        """
+        Calculates the exponent connecting velocity dispersion to mass.
         
+        Parameters
+        ----------
+        fbh : float
+            BH fraction.
+
+        Returns
+        -------
+        b : float
+            Exponent. It varies with the BH fraction.
+
+        """
+        b = self.b if not self.sigma_exponent_run else self.b_min + (self.b_max - self.b_min) * exp (- self.gamma_exp * fbh) # No BHs, starts with equal velocity dispersion. As time flows by it approaches equipartition.
+        
+        return b
+         
     # Friction term ψ in the relaxation. It is characteristic of mass spectrum within rh, here due to BHs. We neglect O(2) corrections in the approximate form.
     def _psi(self, fbh, M, mbh, mst): 
         """
-        Calculate ψ for the cluster based on various parameters.
+        Calculates ψ for the cluster based on various parameters.
 
         Parameters:
         -----------
@@ -737,28 +799,29 @@ class clusterBH:
         """
         
         # Number of particles.
-        Np = M * ( fbh / mbh + (1 - fbh) / mst)
+        Np = M * (fbh / mbh + (1 - fbh) / mst)
        
         # Average mass and stellar mass.
         mav = M / Np # [Msun]
        
         # Exponent.
-        gamma = self.b if not self.psi_exponent_run else self.b_min + (self.b_max - self.b_min) * exp (- self.gamma_exp * fbh) # No BHs, starts with equal velocity dispersion. As time flows by it approaches equipartition. Maximum value is 2.26.
+        gamma = self._b(fbh)
         
         # Result.
         if not self.dark_clusters:
             # Approximate form is the default option. Parameters a11, a12, b1 and b2 relate the properties within rh to the global properties.
-            psi = self.a0  + self.a11 * self.a12 ** (gamma - 1) * fbh ** self.b1 * (mbh / mav) ** ((gamma - 1) * self.b2)  
+            psi = self.a0  + self.a11 * self.a12 ** (gamma + 1) * fbh ** self.b1 * (mbh / mav) ** ((gamma + 1) * self.b2)  
         else:
             # Total expression. Can be used for instance if the stellar population depletes first.
-            psi = self.a0 * (mst / mav) ** (self.b0 * (gamma - 1)) * (1 - self.a11 * fbh ** self.b1) + self.a11 * self.a12 ** (gamma - 1) * fbh ** self.b1 * (mbh / mav) ** (self.b2 * (gamma - 1)) # Complete expression if we include the contribution from stars as well.
-           
+            psi = self.a0 * (mst / mav) ** (self.b0 * (gamma + 1)) * (1 - self.a11 * fbh ** self.b1) + self.a11 * self.a12 ** (gamma + 1) * fbh ** self.b1 * (mbh / mav) ** (self.b2 * (gamma + 1)) # Complete expression if we include the contribution from stars as well.
+        # The prefactors defined as a0, a11, a12 are in priciple variables. The proper model requires knowledge about the number densitites to avoid this issue. This is just a trial model.
+        # For fbh=0, in reality the result should be different from 0. If the remaining stellar mass spectrum is narrow, this approach suffices.  
         return psi
     
     # Relaxation as defined by Spitzer. Here we consider the effect of mass spectrum due to BHs. 
     def _trh(self, M, rh, fbh, mbh, mst):
         """
-        Calculate the relaxation timescale (`trh`) for a cluster, taking into account mass, radius, 
+        Calculates the relaxation timescale (`trh`) for a cluster, taking into account mass, radius, 
         BH fraction and time evolution.
 
         Parameters:
@@ -812,9 +875,9 @@ class clusterBH:
         return trh
         
     # Relaxation for stars depending on the assumptions. 
-    def _trhstar(self, M, rh, fbh, mbh, mst): 
+    def _tev(self, M, rh, fbh, mbh, mst): 
         """
-        Calculate the evaporation timescale (`trh`) for a cluster, taking into account mass and radius.
+        Calculates the evaporation timescale (`tev`) for a cluster, taking into account mass and radius.
 
         Parameters:
         -----------
@@ -852,9 +915,13 @@ class clusterBH:
         # Number of particles.
         Np = M * ( fbh / mbh + (1 - fbh) / mst)
         
+        # Average mass evaporated in the region.
+        mev = mst if not self.dark_clusters else mst + (mbh * self._psi(fbh, M, mbh, mst) - mst) * 2  / (1 + exp(self.k_bh * self.c_bh * (1 - fbh)))  # Logistic function for smooth transition. When the BH fraction increases, the evaporation mass should change. The limit should be tev = trh. The formula neglects stellar mass spectrum.
+        
         # Relaxation for evaporation.
-        trhstar = 0.138 * sqrt(M * rh ** 3 / self.G) / (mst *  log(self.gamma * Np)) # [Myrs]
-      
+        trhstar = 0.138 * sqrt(M * rh ** 3 / self.G) / (mev *  log(self.gamma * Np)) # [Myrs]
+        # If this timescale is used for evaporation. It may require corrections (ψ) for the case of dark clusters, it is included through mev. 
+       
         if self.rotation: # Effect of rigid rotation.
             trhstar *= (1 - 2 * self.omega0 ** 2 * rh ** 3 / (self.G * M)) ** (3 / 2) # [Myrs] Assume constant rotation for now.
           
@@ -863,7 +930,7 @@ class clusterBH:
     # Crossing time within the half-mass radius in Myrs.
     def _tcr(self, M, rh, k=1): 
         """
-        Calculate the crossing timescale (`tcr`) for a cluster, which is related to the time it takes 
+        Calculates the crossing timescale (`tcr`) for a cluster, which is related to the time it takes 
         for particles to cross the half-mass radius of the cluster.
 
         Parameters:
@@ -891,10 +958,57 @@ class clusterBH:
       
         return tcr
     
+    def _tdf(self, M, RG, Np):
+        """
+        Calculates the time scale for dynamical friction.
+        
+        Parameters
+        ----------
+        M : float
+            Total mass of the cluster [Msun].
+        RG : float
+            Galactocentric distance [kpc].
+        Np : float
+            Number of particles.
+
+        Returns
+        -------
+        float
+           The time scale for dynamical friction (`tdf`) [Myrs].
+
+        """
+
+        # Time scale for dynamical friction.
+        X = 1 # Ratio of velocity over velocity dispersion. Equal to 1 for isothermal sphere. Function of RG for different galactic models.
+        tdf = 1.023 * self.Vc * 1e6 * RG ** 2 / (self.G * M * log(self.gamma * Np)) / (erf(X) - 2 * X * exp(-X ** 2) / sqrt(pi)) # [Myrs] Time scale for dynamical friction.
+       
+        return tdf
+    
+    def _tdis(self, M):
+        """
+        Computes the disruption time scale for interactions with GMC.
+        
+        Parameters
+        ----------
+        M : float
+            Mass of the cluster [Msun]
+
+        Returns:
+        -------
+        float
+            Disruption time scale [Myrs].
+
+        """
+        
+        # Time scale for disruption.
+        tdis = 2e3 * (5.1 / (self.Sigma_n * self.rho_n)) * (M / 10 ** 4) ** self.gamma_n # [Myrs] 
+        
+        return tdis
+    
     # Central escape velocity.
     def _vesc(self, M, rh):
         """
-        Calculate the central escape velocity (`vesc`) for a cluster, based on its total mass and half-mass radius.
+        Calculates the central escape velocity (`vesc`) for a cluster, based on its total mass and half-mass radius.
 
         Parameters:
         -----------
@@ -933,7 +1047,7 @@ class clusterBH:
     def _fc(self, M, rh):
         
         """
-        Estimate the change in parameter fc, and effectively on King's parameter W0, and its impact on the central escape velocity.
+        Estimates the change in parameter fc, and effectively on King's parameter W0, and its impact on the central escape velocity.
         
         Parameters:
         -----------
@@ -957,7 +1071,7 @@ class clusterBH:
     # Construct the differential equations to be solved. 
     def _odes(self, t, y):
         """
-        Compute the time derivatives of the system's state variables, which describe the evolution of a star cluster 
+        Computes the time derivatives of the system's state variables, which describe the evolution of a star cluster 
         under various physical processes including stellar evolution, tidal effects, ejections, mass segregation, and core collapse.
 
         Parameters:
@@ -973,6 +1087,7 @@ class clusterBH:
            - y[3] : float : Parameter describing mass segregation, `Mval`.
            - y[4] : float : Parameter describing the ratio `rh / rv`.
            - y[5] : float : Average stellar mass `mst` [Msun].
+           - y[6] : float : Galactocentric distance `RG` [kpc].
 
         Returns:
         --------
@@ -984,6 +1099,7 @@ class clusterBH:
            - `Mval_dot` : Evolution of the mass segregation parameter [1/Myr].
            - `r_dot` : Evolution of half-mass over Virial radius [1/Myr]
            - `mst_dot`: Average stellar mass loss rate [Msun/Myr]
+           - `RG_dot` : Rate of change of galactocentric distance [kpc/Myr].
 
         Notes:
         ------
@@ -996,10 +1112,11 @@ class clusterBH:
          - Mass segregation is evolved if the option is selected.
          - Virial radius evolves differently in the unbalanced phase if the option is selected. In the future the smoothing function will be included.
          - The average stellar mass also evolves due to sev. It accounts the proper solution, if a running ν is selected.
+         - RV filling clusters can be described as well. An induced mass loss rate is available.
         3. **Tidal Effects**:
          - If tides are active, they contribute to mass loss and affect the half-mass radius evolution.
          - Finite escape time and rotation are also included in the tidal mass-loss calculation if selected. Rotation is implemented in a naive way and more study is needed.
-         - In the future, the impact of tides on the average stellar mass will be included. Should affect low galactocentric distances and light star clusters mainly.
+         - The impact of tides on the average stellar mass can be included. Should affect low galactocentric distances and light star clusters mainly.
         4. **BH Mass Loss**:
          - BH mass loss includes mechanisms for ejection based on cluster parameters and equipartition states. Tidal effects are also available but not properly implemented, as the average BH mass remains unaffected. More study is needed.
         5. **Cluster Expansion**:
@@ -1007,8 +1124,8 @@ class clusterBH:
          - The contribution of evaporating stars to half-mass radius changes is also included, if the option is activated.
         6. **Combined Mass Loss**:
          - Total mass loss and its impact on the cluster size are calculated for both stars and BHs.
-      
-        - The returned derivatives (`Mst_dot`, `Mbh_dot`, `rh_dot`, `Mval_dot`, `r_dot`, `mst_dot`) can be used in numerical integrators to evolve the cluster state over time.
+        7. Additional cases such as interactions with GMCs or tidal spirallings are available should the user wish to activate them.
+        - The returned derivatives (`Mst_dot`, `Mbh_dot`, `rh_dot`, `Mval_dot`, `r_dot`, `mst_dot`, `RG_dot`) can be used in numerical integrators to evolve the cluster state over time.
         """
         
         Mst = y[0] # [Msun] Mass of stars.
@@ -1017,29 +1134,30 @@ class clusterBH:
         Mval = y[3] # Parameter for mass segregation.
         r = y[4] # Ratio rh / rv.
         mst = y[5] # [Msun] Average stellar mass.
+        RG = y[6] # [kpc] Galactocentric distance.
         
         # Time instances are repeated multiple times. It is faster to assign them in local variables.        
-        tcc = self.tcc  # [Myrs] Core collapse.
+        tcc = self.tcc # [Myrs] Core collapse.
         tsev = self.tsev # [Myrs] Stellar evolution.
         tbh = self.t_bhcreation # [Myrs] Time instance when BHs have been created.
 
-        mbh = self._mbh(Mbh)  # [Msun] Extract the average BH mass.
-        if Mbh < mbh: Mbh, mbh = 0, 1e-99  # Useful statements for functions to be called later.
-        if Mst < self.mst_inf: Mst, mst = 0, 1e-99 # Suggests that all stars have left the cluster
+        mbh = self._mbh(Mbh) # [Msun] Extract the average BH mass.
+        if 0 < Mbh < mbh: Mbh, mbh = 0, 1e-99 # Useful statements for functions to be called later.
+        if 0 < Mst < self.mst_inf: Mst, mst = 0, 1e-99 # Suggests that all stars have left the cluster
         if rh < 0: rh = 0 # Half-mass is strictly non-negative.
-      
-        # F = self.balance_dict[self.balance_model](t) # Future extension. Balancing function used to smoothly connect the two periods, (prior to post core collapse). With this, the if statements before and after tcc should be dropped.
+        
+        F = self.balance_function(t) # Balancing function used to smoothly connect the two periods, (prior to post core collapse).
         
         M = Mst + Mbh # [Msun] Total mass of the cluster. It is overestimated a bit initially because we assume Mbh > 0 from the start.
         fbh = Mbh / M # Fraction of BHs. Before core collapse is it overestimated. It is corrected after the first few Myrs.
+        # Constant is inserted so that for dissolved clusters where M is 0, fbh is set to 0.
         
-    # These comments are to be activated (for now) only when E / M φ0 receives dependence on q = mbh / m.
-    #    Np = M * ( fbh / mbh + (1 - fbh) / mst)  # Total number of particles.
-    #    m = M / Np # [Msun] Total average mass.
+        Np = M * (fbh / mbh + (1 - fbh) / mst) # Total number of particles.
+        m = M / Np # [Msun] Total average mass.
         
-        rt = self._rt(M) # [pc] Tidal radius.
+        rt = self._rt(M, RG) # [pc] Tidal radius.
         trh = self._trh(M, rh, fbh, mbh, mst) # [Myrs] Relaxation.
-        trhstar = self._trhstar(M, rh, fbh, mbh, mst) if self.two_relaxations else trh  # [Myrs] Evaporation time scale. Check whether it is different from relaxation within rh.
+        tev = self._tev(M, rh, fbh, mbh, mst) if self.two_relaxations else trh # [Myrs] Evaporation time scale. Check whether it is different from relaxation within rh.
        
         Mst_dot = rh_dot = Mbh_dot = 0 # [Msun / Myrs], [pc / Myrs], [Msun / Myrs] At first the derivatives are set equal to zero.
         Mval_dot = r_dot = mst_dot = 0 # [1 / Myrs], [1 / Myrs], [Msun / Myrs] Derivatives for parameter of mass segregation, ratio rh / rv and average stellar mass.
@@ -1048,14 +1166,16 @@ class clusterBH:
         G, x = self.G, self.x # Gravitational constant and exponent for finite escape time. Appear multiple times.
         kin, index = 1, 0 # Parameters that reappear. Used for the energy budget.
         
+        Mst_dotev, mst_dotev = 0, 0 # [Msun / Myrs] Rates of change of stellar mass due to tides.
+       
         # Add tidal mass loss.
         if self.tidal: # Check if we have tides.  
            
-           xi = numpy.max(self.xi_function(rh, rt), self.fmin) # Tides. With F it should be xi = (self.fmin + F * (1 - self.fmin)) * self._xi(rh, rt). Now, it is compared to the fmin.
+           xi = max(self.xi_function(rh, rt), self.fmin) # Tides. 
         
-           if self.finite_escape_time:
-              tcr = self._tcr(M, rh, k=self.tcross_index) # [Myrs] Crossing time.
-              P = self.p * (trhstar / tcr) ** (1 - x)  # Check if we have finite escape time from the Lagrange points.
+           if self.finite_escape_time: # Check if evaporation is energy dependent.
+              tcr = self._tcr(M, rh, k=0.138) # [Myrs] Crossing time.
+              P = self.p * (tev / tcr) ** (1 - x)  # Check if we have finite escape time from the Lagrange points.
               xi *= P
               
            if self.rotation: # If the cluster rotates, the evaporation rate changes. A similar change to relaxation is used.
@@ -1064,84 +1184,108 @@ class clusterBH:
            # Effect of evaporating stars on the half mass radius. Keep only evaporation.   
            if self.escapers: # It is connected to the model for the potential of the cluster. 
               index = numpy.abs(self.cluster_model_function(rt, M)) / (G * M) # [pc^2 / Myrs^2 ] Get the value from the dictionary. It changes with respect to the potential assumed for the cluster.
-              kin = self.kin if not self.varying_kin else 2 * (self._tcr(M, rh) * 0.138 / trhstar) ** (1 - x)  # Kinetic term for evaporating stars. Can be either a constant value or effectively a function of the number of particles.
-           
+              kin = self.kin if not self.varying_kin else 2 * (self._tcr(M, rh, k=0.138) / tev) ** (1 - x)  # Kinetic term for evaporating stars. Can be either a constant value or effectively a function of the number of particles.
+              # Varying kin for sparse clusters at small galactocentric distances may give half-mass radii larger that the tidal radius. Extra care is needed.
+              
            if Mst > 0: # Tidal mass loss appears only when stars are present.                 
-              mst_dot += self.chi * (1 - self.m_breaks[0] / mst) * (1 - mst / self.mst_inf) * xi * mst / trhstar # [Msun / Myrs] Rate of change of average stellar mass due to tides.  
-              Mst_dot -= xi * Mst / trhstar # [Msun / Myrs] Mass loss rate of stars due to tides (and central ejections).
-              rh_dot += 6 * xi / r / trhstar * (1 - kin) * rh ** 2 * index * Mst / M # [pc / Myrs] If escapers carry negative energy as they leave, the half mass radius is expected to increase since it is similar to emitting positive energy. The effect is proportional to tides.
+              mst_dotev += self.chi_ev * (1 - self.m_breaks[0] / mst) * (1 - mst / self.mst_inf) * xi * mst / tev # [Msun / Myrs] Rate of change of average stellar mass due to tides. Can be avoid if the SSP tools were used and mass subtraction was performed bottom-up, however solely for tidal mass loss. 
+              Mst_dotev -= xi * Mst / tev # [Msun / Myrs] Mass loss rate of stars due to tides (and central ejections).
+              rh_dot += 2 * Mst_dotev / M * rh # [pc / Myrs] Impact of tidal mass loss to the size of the cluster.
+              rh_dot += 6 * xi / r / tev * (1 - kin) * rh ** 2 * index * Mst / M  # [pc / Myrs] If escapers carry negative energy as they leave, the half mass radius is expected to increase since it is similar to emitting positive energy. The effect is proportional to tides.
            
            # If the tidal field was important, an additional mass-loss mechanism would be needed.
            if self.dark_clusters and Mbh > 0 and t >= tbh: # Appears when BHs have been created.
               gbh = (exp(self.c_bh * fbh) - 1) / (exp(self.c_bh) - 1) # A simple dependence on fbh is shown. Trial model, will be studied extensively in the future.
               xi_bh = xi * gbh # Modify the tidal field that BHs feel such that it is negligible when many stars are in the cluster, and it starts increasing when only a few are left. 
-              Mbh_dot -= xi_bh * Mbh / trhstar # [Msun / Myrs] Same description as stellar mass loss. Use relaxation in the outskirts. When BH eveporation becomes important, psi=1 approximately so the expressions should match.
+              Mbh_dot -= xi_bh * Mbh / tev # [Msun / Myrs] Same description as stellar mass loss. Use relaxation in the outskirts. When BH eveporation becomes important, psi=1 approximately so the expressions should match.
              # mbh should increase with the tidal field. Another prescription is needed for mbh, or neglect it approximately. 
              # Now if BH evaporation is important and escapers is activated, it should be included here.
-              rh_dot += 6 * xi_bh / r / trhstar * (1 - kin) * rh ** 2 * index * Mbh / M # [pc / Myrs] The kinetic term is the same here, it does not distinguish particle types.
+              rh_dot += 6 * xi_bh / r / tev * (1 - kin) * rh ** 2 * index * fbh  # [pc / Myrs] The kinetic term is the same here, it does not distinguish particle types.
         
         # Unbalanced phase. Check for the impact of the Virial radius on the half-mass expansion.
-        if t < tcc:
-            
-            if self.Virial_evolution:
-               r_dot += r * (self.rf - r) / trh # * F # [1 / Myrs] Because the Virial radius evolves slower compared to the half-mass radius, it accounts for this difference. Does not evolve in the balanced phase.
-               rh_dot += rh * r_dot / r # Correction term from energy variation. A better expression for r_dot is needed.
+        
+        if self.virial_evolution:
+           r_dot += r * (self.rf - r) / trh * numpy.heaviside(tcc - t, 0) * F # [1 / Myrs] Because the Virial radius evolves slower compared to the half-mass radius, it accounts for this difference. Does not evolve in the balanced phase.
+           rh_dot += rh * r_dot / r # Correction term from energy variation. A better expression for r_dot is needed.
        
-            # Check if the cluster segregates.
-            if self.mass_segregation:
-               Mval_dot += Mval * (self.Mvalf - Mval) / trh  # [1 / Myrs] Evolution of parameter describing mass segregation. 
+        # Check segregation.
+        if self.mass_segregation:
+           Mval_dot += Mval * (self.Mvalf - Mval) / trh * numpy.heaviside(tcc - t, 0)  # [1 / Myrs] Evolution of parameter describing mass segregation. 
         
         # Balanced Phase. Check for stellar ejections.
-        else:
              
-            rh_dot += zeta * rh / trh # [pc / Myrs] Instead of the if statement, simply multiplying with F should work.
-           
-            S = max(self.a11 * self.a12 ** (3 / 2) * (Mbh / Mst) ** self.b1 * (mbh / mst) ** (self.b2 * 3 / 2), self.Sf) # Spitzer's parameter for equipartition. Use parameters to relate properties with rh to global ones.
-            # Sf serves as a minimum value indicative of equipartion, below which the BH ejection rate is kept constant.
+        rh_dot += zeta * rh / trh * F # [pc / Myrs] Instead of the if statement, simply multiplying with F should work.
             
-            beta_f = self.beta_function(S) # Factor used to modulate BH and stellar ejections. Depends on Spitzer´s parameter, and becomes constant when equipartition is reached.
+        S = max(self._psi(fbh, M, mbh, mst) - 1, self.Scrit) # Parameter similar to Spitzer's parameter used for equipartition. A threshold is inserted, however it is 0 by default.
+        # In principle it is self._psi(fbh, M, mbh, mst) - self.a0 * (mst / m) ** (self.b0 * (gamma - 1)), gamma = self._b(fbh).
+        # For fbh->1, S->0 and ejections vanish for the case of dark clusters. The prescription may need to be changed for dark clusters if ejections for them are important/observed. Perhaps for fbh > 0.2 or another value, S is kept to a large value, say 1e3.
+            
+        beta_f = self.beta_function(S) # Factor used to modulate BH and stellar ejections. Depends on Spitzer´s parameter, and becomes constant when equipartition is reached.
         
-            if Mbh > 0: # Check if BHs are present. BHs evolve only in the balanced phase and lose mass through ejections.
+        if Mbh > 0: # Check if BHs are present. BHs evolve only in the balanced phase and lose mass through ejections.
                   
-               beta = self.beta # Ejection rate of BHs. Initially it is set as a constant. It should be changed when fbh increases a lot and the light component does not dominate anymore.
+            beta = self.beta * F # Ejection rate of BHs. Initially it is set as a constant. It should be changed when fbh increases a lot and the light component does not dominate anymore.
+            # If tcc < tsev, it ejects BH progenitors.
             
-               if fbh < self.fbh_crit and self.running_bh_ejection_rate_1: # Condition for decreasing the ejection rate of BHs due to E / M φ0. A condition for mbh_crit may be needed.
-                   beta *=  (fbh / self.fbh_crit) ** self.b4 #* (mbh / m / self.qbh_crit) ** self.b5 # A dependence on the average mass ratio mbh / m (or metallicity) may be needed.
-               
-               if self.running_bh_ejection_rate_2: # Decrease the ejection rate for clusters that are close to reaching equipartition.
+            if fbh < self.fbh_crit and self.running_bh_ejection_rate_1: # Condition for decreasing the ejection rate of BHs due to E / M φ0. A condition for mbh_crit may be needed.
+                beta *=  (fbh / self.fbh_crit) ** self.b4 * (mbh / m / self.qbh_crit) ** self.b5 # A dependence on the average mass ratio mbh / m (or metallicity) may be needed.
+           
+            if self.running_bh_ejection_rate_2: # Decrease the ejection rate for clusters that are close to reaching equipartition.
                   
-                  beta *= beta_f # Change the ejection rate with respect to Spitzer's parameter.
+               beta *= beta_f # Change the ejection rate with respect to S.
                
-               Mbh_dot -= beta * zeta * M / trh  # [Msun / Myrs] Ejection of BHs each relaxation. 
-           
-            if Mst > 0: # A proper description should start with zero alpha_c, increase slightly up until core collapse, be a function of fbh, mbh and when we have no BHs it maximizes.
-           
-               alpha_c = self.alpha_ci # Initial ejection rate of stars. With F, it should be alpha_c += self.alpha_ci * F 
-           
-               if self.running_bh_ejection_rate_2: # Check if the ejection rate varies with the BH population.
-                   alpha_c += (self.alpha_cf - alpha_c) * (1 - beta_f) # * F # This expression states that with many BHs, the ejection rate of stars should be small, and when the BHs vanish it increases. A similar rate of change as for the BH ejection rate is used. 
-           
-               if self.running_stellar_ejection_rate: # Check if the ejection rate decreases for increasing tides.
-                   alpha_c *= (1 - 5 * xi / (3 * zeta)) # Alter alpha_c based on tides as introduced in EMACSS.
-               
-               Mst_dot -= alpha_c * zeta * M / trh # [Msun / Myrs] Contribution of central stellar ejections.
+            Mbh_dot -= beta * zeta * M / trh  # [Msun / Myrs] Ejection of BHs each relaxation. 
+            rh_dot += 2 * Mbh_dot / M * rh # [pc / Myrs] Contraction since BHs are removed.
             
-        rh_dot += 2 * Mst_dot / M * rh # [pc / Myrs] Impact of tidal mass loss to the size of the cluster.
-       
-        Mst_dotsev = 0 # [Msun / Myrs] Mass loss rate from stellar evolution.
+        Mst_dotgmc, mst_dotgmc = 0, 0 # [Msun / Myrs] Mass loss rates from interactions with Giant Mollecular Clusters. Introduces additional mass-loss. 
+        Mst_dotej, mst_dotej = 0, 0 # [Msun / Myrs] Mass loss rates from stellar ejections.
+     
+        if Mst > 0: # A proper description should start with zero alpha_c, increase slightly up until core collapse, be a function of fbh, mbh and when we have no BHs it maximizes.
+            
+            alpha_c = self.alpha_ci * F # Initial ejection rate of stars. With F, it should be alpha_c += self.alpha_ci * F 
+           
+            if self.running_bh_ejection_rate_2: # Check if the ejection rate varies with the BH population.
+                alpha_c += (self.alpha_cf * F - alpha_c) * (1 - beta_f) # This expression states that with many BHs, the ejection rate of stars should be small, and when the BHs vanish it increases. A similar rate of change as for the BH ejection rate is used. 
+           
+            if self.running_stellar_ejection_rate: # Check if the ejection rate decreases for increasing tides.
+                alpha_c *= (1 - 5 * xi / (3 * zeta)) # Alter alpha_c based on tides as introduced in EMACSS.
                
+            Mst_dotej -= alpha_c * zeta * M / trh # [Msun / Myrs] Contribution of central stellar ejections.
+            mst_dotej -= alpha_c * zeta * self.chi_ej * mst * (1 - self.m_breaks[0] / mst) / trh  # [Msun / Myrs] Mass loss rate should be top_down. This is a trial method for decreasingthe average stellar mass.  
+            rh_dot += 2 * Mst_dotej / M * rh # [pc / Myrs] Impact of tidal mass loss to the size of the cluster.
+            
+            if self.GMC:
+                tdis = self._tdis(M) # [Myrs] Applied to stellar mass only. It is inserted continuously.
+                mst_dotgmc += self.chi_gmc * (1 - self.m_breaks[0] / mst) * (1 - mst / self.mst_inf) / tdis # [Msun / Myrs] Average stellar mass increases since low mass stars vanish.
+                Mst_dotgmc -= Mst / tdis # [Msun / Myrs]
+                rh_dot += 2 * Mst_dotgmc / M * rh # [pc / Myrs]
+            
+        Mst_dotsev, mst_dotsev = 0, 0 # [Msun / Myrs] Mass loss rates from stellar evolution.
+        Mst_dotsev_ind = 0 # [Msun / Myrs] Induced mass loss rate for RV filling clusters. 
+        
         # Stellar mass loss. Impact of stellar winds.
         if self.sev and t >= tsev and Mst > 0: # This contribution is present only when Mst is nonzero.
             nu = numpy.max(self.nu_function(self.Z, t), 0) # Rate of stellar mass loss due to stellar winds. Taken from a dictionary, ensures that it is non-negative.
-            mst_dot -= nu * (mst - mst * self.M0 / Mst * self.nu_factor) / t # [Msun/Myrs] When we consider stellar evolution, the average stellar mass changes through this differential equation. It is selected so that the case of a varying nu is properly described.
+            mst_dotsev -= nu * (mst - mst * self.M0 / Mst * self.nu_factor) / t # [Msun/Myrs] When we consider stellar evolution, the average stellar mass changes through this differential equation. It is selected so that the case of a varying nu is properly described.
             Mst_dotsev -= nu * (Mst - self.M0 * self.nu_factor) / t  # [Msun / Myrs] Stars lose mass due to stellar evolution. If it is the sole mechanism for mass loss, it implies that N is constant since mst decreases with the same rate.
             rh_dot -= (Mval - 2) *  Mst_dotsev / M * rh # [pc / Myrs] The cluster expands for this reason. It is because a uniform distribution is assumed initially. 
+            
+            if self.induced_loss and rh / rt > self.Rht_crit: # Check if the cluster is RV filling. Not important at large time scales.
+                t_delay = self.n_delay * self._tcr(M, rt, k=1) # Compute the crossing time at the tidal radius.
+                f_ind = self.find_max * (1 - exp(-t / t_delay)) # Function for induced mass loss.
+                Mst_dotsev_ind += f_ind * Mst_dotsev # Add this contribution to the stellar mass loss.
+                rh_dot += 2 * Mst_dotsev_ind / M * rh # If it is, the half-mass radius decreases due to induced mass loss. It is derived from conservation of energy.
+            
+        Mst_dot += Mst_dotev + Mst_dotsev + Mst_dotej + Mst_dotsev_ind + Mst_dotgmc # [Msun / Myrs] Correct the total stellar mass loss rate. This way, resummation in rhdot is avoided.
+        mst_dot += mst_dotev + mst_dotsev + mst_dotej + mst_dotgmc # [Msun / Myrs] Correct the average stellar mass loss rate by considering all contributions.
         
-        Mst_dot += Mst_dotsev  # [Msun / Myrs] Correct the total stellar mass loss rate. This way, resummation in rhdot is avoided.
-   
-        rh_dot += 2 * Mbh_dot / M * rh # [pc / Myrs] Contraction since BHs are removed.
-    
-        derivs = numpy.array([Mst_dot, Mbh_dot, rh_dot, Mval_dot, r_dot, mst_dot], dtype=object) # Save all derivatives in a sequence.
+        RG_dot = 0 # [kpc / Myrs]
+        
+        # Condition to check whether the galactocentric distance changes due to inspiral.
+        if self.tidal_spiraling and self.tidal:
+            RG_dot -= RG / self._tdf(M, RG, Np) * numpy.heaviside(RG, 0) # [kpc / Myrs] Galactocentric distance cannot be negative. Truncate to the tidal radius.
+        
+        derivs = numpy.array([Mst_dot, Mbh_dot, rh_dot, Mval_dot, r_dot, mst_dot, RG_dot], dtype=object) # Save all derivatives in a sequence.
 
         return derivs # Return the derivatives in an array.
 
@@ -1179,8 +1323,9 @@ class clusterBH:
         Mval = [self.Mval0] # Initial parameter for mass segregation.
         r = [self.r0] # Initial value for rh / rv.
         mst = [self.m0] # [Msun] Initial average stellar mass.
+        RG = [self.rg] # [kpc] Galactocentric distance.
        
-        y = [Mst[0], Mbh[0], rh[0], Mval[0], r[0], mst[0]] # Combine them in a multivariable.
+        y = [Mst[0], Mbh[0], rh[0], Mval[0], r[0], mst[0], RG[0]] # Combine them in a multivariable.
 
         def event(t, y):
             # Check if either condition is still valid.
@@ -1204,6 +1349,7 @@ class clusterBH:
         self.Mval = sol.y[3] # Parameter for segregation.
         self.r = sol.y[4] # Ratio rh / rv.
         self.mst = sol.y[5] # [Msun] Average stellar mass.
+        self.RG = sol.y[6] # [kpc] Galactocentric distance.
         
         self.mbh = numpy.array([self._mbh(x) for x in self.Mbh]) # [Msun] Average BH mass.
         self.Mbh = numpy.where(self.Mbh >= self.mbh, self.Mbh, 0) # [Msun] BH mass corrected for mbh > Mbh.
@@ -1214,7 +1360,7 @@ class clusterBH:
         
         # Quantities for the cluster.
         self.M = self.Mst + self.Mbh # [Msun] Total mass of the cluster. BHs are included already. A small error in the first few Myrs is present.
-        self.rt = self._rt(self.M) # [pc] Tidal radius.
+        self.rt = self._rt(self.M, self.RG) # [pc] Tidal radius.
         self.fbh = self.Mbh / self.M # BH fraction.
         self.mbh_max = numpy.array([self._find_mmax(x) for x in self.Mbh]) # [Msun] Maximum BH mass in the BHMF as a function of time. 
         self.mbh_max = numpy.where(self.Mbh >= self.mbh, self.mbh_max, 0) # Correct the upper BH mass to account for the case of no BHs left in the cluster.
@@ -1222,16 +1368,20 @@ class clusterBH:
         # Further properties.
         self.rv = self.rh / self.r # [pc] Virial radius.
         self.psi = self._psi(self.fbh, self.M, self.mbh, self.mst) # Friction term ψ.
-        self.Np = numpy.round(self.M * ( self.fbh / self.mbh + (1 - self.fbh) / self.mst)).astype(int) # Number of components. 
+        self.Np = self.M * ( self.fbh / self.mbh + (1 - self.fbh) / self.mst) # Number of components. 
         self.mav = self.M / self.Np # [Msun] Average mass of cluster over time, includes BHs. No significant change is expected given that Nbh <= O(1e3), apart from the beginning where the difference is a few percent.
-        self.Nbh = numpy.round(self.Mbh / self.mbh).astype(int) # Number of BHs.
+        self.mev = self.mst if not self.dark_clusters else self.mst + (self.mbh * self.psi - self.mst) * 2  / (1 + exp(self.k_bh * self.c_bh * (1 - self.fbh))) # [Msun] Average mass evaporated.
+        self.Nbh = self.Mbh / self.mbh # Number of BHs.
         self.E = - self.r * self.G * self.M ** 2 / (4 * self.rh) # [pc^2 Msun / Myrs^2] External energy of the cluster
-        if (self.tidal): self.xi = numpy.maximum(self.xi_function(self.rh, self.rt), self.fmin) # Evaporation rate.
+        if self.tidal: self.xi = numpy.maximum(self.xi_function(self.rh, self.rt), self.fmin) # Evaporation rate.
         self.trh = self._trh(self.M, self.rh, self.fbh, self.mbh, self.mst) # [Myrs] Relaxation within rh. Describes ejections.
-        self.trhstar = self._trhstar(self.M, self.rh, self.fbh, self.mbh, self.mst) # [Myrs] Relaxation within rh. Describes evaporation.
+        self.tev = self._tev(self.M, self.rh, self.fbh, self.mbh, self.mst) # [Myrs] Relaxation within rh. Describes evaporation.
         self.tcr = self._tcr(self.M, self.rh) # [Myrs] Crossing time.
+        if self.tidal_spiraling: self.tdf = self._tdf(self.M, self.RG, self.Np) # [Myrs] Dynamical friction time scale.
+        if self.GMC: self.tdis = self._tdis(self.M) # [Myrs] Disruption time scale.
         self.vesc = self._vesc(self.M, self.rh) # [km/s] Escape velocity. 
-        self.S = self.a11 * self.a12 ** (3 / 2) * (self.Mbh / self.Mst) ** self.b1 * (self.mbh / self.mst) ** (3 / 2 * self.b2) # Parameter indicative of equipartition.
+        self.b_run = self._b(self.fbh) # Exponent connecting velocity dispersion to mass.
+        self.S = self.a11 * self.a12 ** (1 + self.b_run) * (self.Mbh / self.M) ** self.b1 * (self.mbh / self.mav) ** ((1 + self.b_run) * self.b2) # Parameter indicative of equipartition.
         self.phi_c = self.cluster_model_function(self.rt, self.M) # [pc^2/Myr^2] Cluster potential at the tidal radius.
         self.phi_0 = - (1.023 * self.vesc) ** 2 / 2 # [pc^2/Myr^2] Central potential. Needs fc to be correct.
         self.fcrun = self._fc(self.M, self.rh) # Parameter to estimate how the escape velocity evolves.
@@ -1239,51 +1389,39 @@ class clusterBH:
         self.nu_run = numpy.maximum(self.nu_function(self.Z, sol.t), 0) # Running stellar mass loss rate.
         self.sigma = sqrt(0.2 * self.G * self.M / self.rh) # Velocity dispersion in the cluster.
         
-        # Check if the results need to be saved. The default option is to save the solutions of the differential equations as well as the tidal radius and average masses of the two components. Additional inclusions are possible.
+        # Checks if the results need to be saved. The default option is to save the solutions of the differential equations as well as the tidal radius and average masses of the two components. Additional inclusions are possible.
         if self.output:
 
-            # Define table header
+            # Defines table header.
             table_header = "# t[Gyrs] Mbh[msun] Mst[msun] rh[pc] rt[pc] mbh[msun] mst[msun] mbh_max[msun]"
 
-            # Prepare data for writing
+            # Prepares data for writing.
             data = numpy.column_stack((self.t, self.Mbh, self.Mst, self.rh, self.rt, self.mbh, self.mst_sev, self.mbh_max))
 
-            # Write data
+            # Writes data.
             numpy.savetxt(self.outfile, data, header=table_header, fmt="%12.5e", comments="")
-
 
 #######################################################################################################################################################################################################################################################
 """
 Notes:
 - Another set of values that can be used is:
-    zeta, beta, n, Rht, ntrh, b, Mval0, Mval_cc, S0 = 0.0977, 0.0566, 0.7113, 0.0633, 0.1665, 2.14, 3.1156, 3.1156, 1.96.
+    zeta, beta, n, Rht, ntrh, b, Mval0, S0 = 0.0977, 0.0566, 0.7113, 0.0633, 0.1665, 2.14, 3.1156, 1.96.
 
 - Functions _mstdot_ev, _balance and _fc are works in progress, currently deactivated or unused.
-- self.Virial_evolution, self.finite_escape_time, self.rotation, self.dark_clusters and self.sev_Z_run are future statemens that require refinement.
+- self.virial_evolution, self.finite_escape_time, self.rotation, self.dark_clusters are future statemens that require refinement.
 - Towards small values of Mbh, the expected values of mbh, mbh_max do not coincide, the difference is a few solar masses.
 
 Use:
 - An isolated cluster can be described with tidal=False. It can have stellar ejections or not.
-- Simple cases where we have no stellar evolution can be described with nu=0.
+- Simple cases where we have no stellar evolution can be described with nu=0 or sev=False.
 - If we start with BHs in the balanced phase at t=0, use ntrh=0.
 - If no change in the BH ejection rate is wanted, use a value for S0 quite close to 0 or disable running_bh_ejection_rate.
-- A richer IMF can be specified by assigning values to additional mass breaks for the intervals, slopes and bins. Default option is 3. They must be inserted in sequence, so m_break5, a_slope4, nbin4 are the next inclusions. Masses must increase. 
+- A richer IMF can be specified by assigning values to additional mass breaks for the intervals, slopes and bins. Default option is 3. Masses must increase. If the upper part is similar to Kroupa, new solutions for Mst, mst are available should the user wish to, otherwise a new value for nu can be inserted. Disable sev_tune.
 
 Limitations:
-- Dissolved clusters cannot be described. A varying mst is needed, and tidal effects must be considered in the stellar average mass.
-- A more accurate connection between the unbalanced and the balanced phase may be needed. See EMACSS.
+- Dissolved clusters cannot be described. Tidal effects must be considered in the stellar average mass. A numerical value for chi is needed.
 - Description of dark clusters has not been studied extensively. 
-- Rotation, if activated, needs to be more accurate since now it remains constant.
-- The special case of RV-filling clusters does not consider stellar induced mass loss rate. It can be inserted however in the odes function.
-- Tidal shocks for interactions with GMC's for instance are not considered here. Can be included in the future.
-
-Room for improvement:
-- When self.dark_clusters is True, and fbh increases, the time scale for evaporation may need to be reconsidered, the evaporation rate could use a different expression. The ejection rate of BHs however, should be changed, it should not follow this law above a given fraction. The average BH mass should in turn increase due to evaporation.
-- When self.Virial_evolution is considered, the current version is not exactly accurate. A better, smoothing function needs to be used.
-- When self.rotation is used, the model considers rigid rotation and the same impact on the evaporation rate. This may not be true necessarily, and a more physical model for rotation may be needed.
-
+- Rotation, if activated, needs to be more accurate since now it is a simple rigid model.
 """
-
-
 
 ########################################################################################################################################################################################################################################################
