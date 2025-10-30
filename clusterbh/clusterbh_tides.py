@@ -171,7 +171,8 @@ class clusterBH:
         self.GMC = False # Condition to allow for interaction with Giant Molecular Clusters.
         self.disk = False # Condition to include shocks from the disk.
         self.tidal_spiralling = False # Condition to assume tidal spiraling of the cluster.
-        
+        self.allow_no_bhs = False  # Currently will hang forever if this is True
+
         # Stellar evolution model. Used for selecting a model for ν.
         self.sev_model = 'constant' # Default option is constant mass loss rate.
         
@@ -586,7 +587,10 @@ class clusterBH:
             self.mst_sev_BH = numpy.interp(self.t_bhcreation, self.t_mst, self.mst_sev) # [Msun] Average stellar mass when all BHs are created. Effect of tides is neglected for simplicity.
             self.Mst_lost = (self.m0 - self.mst_sev_BH) * N # [Msun] Approximate value for the stellar mass lost to create all BHs.
         
-        if self.Mbh0 < self.mlo: self.Mbh0, self.mbh0, self.Nbh0 = 1e-99, 1e-89, 0 # This condition checks whether BHs will be created. If not, clusterBH works only with stars.
+        if self.Mbh0 < self.mlo:
+            self.Mbh0, self.mbh0, self.Nbh0 = 1e-99, 1e-89, 0 # This condition checks whether BHs will be created. If not, clusterBH works only with stars.
+            if not self.allow_no_bhs:
+                raise ValueError("No BHs were initially created and retained.")
        
         # Initial relaxation is extracted with respect to the BH population that will be obtained. It is an approximation such that large metallicity clusters have larger relaxation, as expected. This approach inserts an indirect metallicity dependence.
         if not 0 <= self.Sseg <= 1: # Initial segregation is constrained.
@@ -1406,7 +1410,7 @@ class clusterBH:
         mst = y[4] # [Msun] Average stellar mass.
         RG = y[5] # [kpc] Galactocentric distance.
         Nst = y[6]
-        
+
         # Time instances are repeated multiple times. It is faster to assign them in local variables.        
         tcc = self.tcc # [Myrs] Core collapse.
         tsev = self.tsev # [Myrs] Stellar evolution.
@@ -1633,7 +1637,7 @@ class clusterBH:
 
             # Event function returns the maximum of the two conditions. Stops only when both are negative.
             return numpy.max([condition_1, condition_2]) # Maximum is chosen because it suggests that this population dominates.
-       
+
         def tidal_overflow_event(t, y):
             # Condition for dissolved clusters. Future extension.
             if self.tidal:
