@@ -16,6 +16,7 @@ warnings.simplefilter("ignore", category=RuntimeWarning)
   For more details, visit SMU-clusters/ssptools. 
 """
 
+
 class clusterBH:
     def __init__(self, N, rhoh, **kwargs):
         """
@@ -150,6 +151,7 @@ class clusterBH:
         # Conditions.
         self.ssp = True # Condition to use the SSP tools to extract the BHMF at any moment. Default option uses such tools. 
         self.sev = True # Condition to consider effects of stellar evolution. Affects total mass and expansion of the cluster. Default option considers stellar evolution.
+        self.ssp_sev = True  # both ssp and sev must also be true
         self.sev_tune = True # Condition to consider changes in the sev parameters should the user insert an IMF different than a Kroupa. Default option to True. If false, the user can insert a different IMF with different set of parameters.
         self.kick = True # Condition to include natal kicks. Affects the BH population obtained. Default option considers kicks.
         self.tidal = True # Condition to activate tides. Default option considers the effect of tides.
@@ -169,7 +171,8 @@ class clusterBH:
         self.GMC = False # Condition to allow for interaction with Giant Molecular Clusters.
         self.disk = False # Condition to include shocks from the disk.
         self.tidal_spiralling = False # Condition to assume tidal spiraling of the cluster.
-        
+        self.allow_no_bhs = False  # Currently will hang forever if this is True
+
         # Stellar evolution model. Used for selecting a model for ν.
         self.sev_model = 'constant' # Default option is constant mass loss rate.
         
@@ -220,7 +223,7 @@ class clusterBH:
         
         self.nu_factor = 0 # Factor that corrects solution for Mst, mst for the case of a different IMF that has similar upper part with Kroupa. Default to 0.
         # Check that this is not exactly a Kroupa IMF.
-        if (not (numpy.array_equal(self.a_slopes, self.a_kroupa) and numpy.array_equal(self.m_breaks, self.m_kroupa))) and self.sev_tune and self.sev:
+        if (not (numpy.array_equal(self.a_slopes, self.a_kroupa) and numpy.array_equal(self.m_breaks, self.m_kroupa))) and self.sev_tune and self.sev and not self.ssp_sev:
 
            # Check if IMF high mass slope/breaks match Kroupa above 1Msun
            if ((self.a_slopes[-1] == self.a_kroupa[-1]) and numpy.array_equal(self.m_breaks[-2:], self.m_kroupa[-2:])):
@@ -496,6 +499,7 @@ class clusterBH:
         
         self.mst_sev, self.t_mst = self._mst_sev() # [Msun, Myrs] Solution for average stellar mass if stellar evolution is considered solely. Time is kept for interpolation.
         
+
         # Check whether SSP are used for the BHMF.
         if self.ssp:
             import ssptools # Import the package. Must be installed first.
@@ -515,6 +519,10 @@ class clusterBH:
             self.t_bhcreation = self.ibh.age # [Myrs] Time needed to form these astrophysical mass BHs.
             self.mst_sev_BH = numpy.interp(self.t_bhcreation, self.t_mst, self.mst_sev) # [Msun] Average stellar mass when all BHs are created. Effect of tides is neglected for simplicity.
             
+            self.sev_rates = ssptools.LuminousEvMassLoss(self.ibh.IMF, self.FeH)
+
+            self.tsev = self.sev_rates.tlim
+
         # Should the user wishes to exclude the ssp tools and use another approach, they can first define f0 and then compute Mbh0. A simple approach would be the same value regardless of kicks.
         else:
             mmax_ = numpy.logspace(log10(self.mlo), log10(self.mup), self.N_points) # List of possible values for the maximum BH mass at a given time instance.
@@ -579,7 +587,10 @@ class clusterBH:
             self.mst_sev_BH = numpy.interp(self.t_bhcreation, self.t_mst, self.mst_sev) # [Msun] Average stellar mass when all BHs are created. Effect of tides is neglected for simplicity.
             self.Mst_lost = (self.m0 - self.mst_sev_BH) * N # [Msun] Approximate value for the stellar mass lost to create all BHs.
         
-        if self.Mbh0 < self.mlo: self.Mbh0, self.mbh0, self.Nbh0 = 1e-99, 1e-89, 0 # This condition checks whether BHs will be created. If not, clusterBH works only with stars.
+        if self.Mbh0 < self.mlo:
+            self.Mbh0, self.mbh0, self.Nbh0 = 1e-99, 1e-89, 0 # This condition checks whether BHs will be created. If not, clusterBH works only with stars.
+            if not self.allow_no_bhs:
+                raise ValueError("No BHs were initially created and retained.")
        
         # Initial relaxation is extracted with respect to the BH population that will be obtained. It is an approximation such that large metallicity clusters have larger relaxation, as expected. This approach inserts an indirect metallicity dependence.
         if not 0 <= self.Sseg <= 1: # Initial segregation is constrained.
@@ -1398,7 +1409,8 @@ class clusterBH:
         Mval = y[3] # Parameter for mass segregation.
         mst = y[4] # [Msun] Average stellar mass.
         RG = y[5] # [kpc] Galactocentric distance.
-        
+        Nst = y[6]
+
         # Time instances are repeated multiple times. It is faster to assign them in local variables.        
         tcc = self.tcc # [Myrs] Core collapse.
         tsev = self.tsev # [Myrs] Stellar evolution.
@@ -1486,7 +1498,7 @@ class clusterBH:
            Mval_dot += Mval * (self.Mvalf - Mval) / trh * numpy.heaviside(tcc - t, 0)  # [1 / Myrs] Evolution of parameter describing mass segregation. 
         
         # Balanced Phase.
-             
+
         rh_dot += zeta * rh / trh * F * (1 + index_cg * cg_factor) / denom # [pc / Myrs] Instead of the if statement, simply multiplying with F should work.
         
         S = max(self._psi(fbh, M, mbh, mst) - psi_st, self.Scrit) # Parameter similar to Spitzer's parameter used for equipartition. A threshold is inserted, however it is 0 by default.
@@ -1538,22 +1550,29 @@ class clusterBH:
                 rh_dot += 2 * Mst_dotdisk / M * rh + rh / tshock # [pc / Myrs] Second term comes from the fact that shocks provide energy, cluster expands, some particles may evaporate.
                 mst_dotdisk += self.chi_disk * (1 - self.m_breaks[0] / mst) * (1 - mst / mst_inf) * mst * self.xi_shock / tshock # [Msun / Myrs]
             """
-        Mst_dotsev, mst_dotsev = 0, 0 # [Msun / Myrs] Mass loss rates from stellar evolution.
-        Mst_dotsev_ind = 0 # [Msun / Myrs] Induced mass loss rate for RV filling clusters. 
-        
-        # Stellar mass loss. Impact of stellar winds.
-        if self.sev and t >= tsev and Mst > mst_inf: # This contribution is present only when Mst is nonzero.
-            nu = numpy.max(self.nu_function(self.Z, t), 0) # Rate of stellar mass loss due to stellar winds. Taken from a dictionary, ensures that it is non-negative.
-            mst_dotsev -= nu * (mst - mst * self.M0 / Mst * self.nu_factor) / t # [Msun/Myrs] When we consider stellar evolution, the average stellar mass changes through this differential equation. It is selected so that the case of a varying nu is properly described.
-            Mst_dotsev -= nu * (Mst - self.M0 * self.nu_factor) / t  # [Msun / Myrs] Stars lose mass due to stellar evolution. If it is the sole mechanism for mass loss, it implies that N is constant since mst decreases with the same rate.
-            rh_dot -= (Mval * (1 + index_cg * cg_factor) - 2 * (1 + cg_factor / 2)) / denom *  Mst_dotsev / M * rh # [pc / Myrs] The cluster expands for this reason. It is because a uniform distribution is assumed initially. 
-            
+        Mst_dotsev, mst_dotsev, Nst_dotsev = 0, 0, 0 # [Msun / Myrs] Mass loss rates from stellar evolution.
+        Mst_dotsev_ind = 0 # [Msun / Myrs] Induced mass loss rate for RV filling clusters.
+
+        if self.sev and t >= tsev and Mst > mst_inf:
+
+            # Use LuminousEvMassLoss from SSPtools
+            if self.ssp and self.ssp_sev:
+                Mst_dotsev, Nst_dotsev, mst_dotsev = self.sev_rates(t, [Mst, Nst, mst])
+                rh_dot -= (Mval * (1 + index_cg * cg_factor) - 2 * (1 + cg_factor / 2)) / denom *  Mst_dotsev / M * rh # [pc / Myrs] The cluster expands for this reason. It is because a uniform distribution is assumed initially.
+
+            # Use nu based stellar evolution
+            else:
+                nu = numpy.max(self.nu_function(self.Z, t), 0) # Rate of stellar mass loss due to stellar winds. Taken from a dictionary, ensures that it is non-negative.
+                mst_dotsev -= nu * (mst - mst * self.M0 / Mst * self.nu_factor) / t # [Msun/Myrs] When we consider stellar evolution, the average stellar mass changes through this differential equation. It is selected so that the case of a varying nu is properly described.
+                Mst_dotsev -= nu * (Mst - self.M0 * self.nu_factor) / t  # [Msun / Myrs] Stars lose mass due to stellar evolution. If it is the sole mechanism for mass loss, it implies that N is constant since mst decreases with the same rate.
+                rh_dot -= (Mval * (1 + index_cg * cg_factor) - 2 * (1 + cg_factor / 2)) / denom *  Mst_dotsev / M * rh # [pc / Myrs] The cluster expands for this reason. It is because a uniform distribution is assumed initially.
+
             if self.induced_loss and self.tidal and rh / rt > self.Rht_crit: # Check if the cluster is RV filling. Not important at large time scales. Trial stage.
                 t_delay = self.n_delay * self._tcr(M, rt, k=1) # [Myrs] Compute the crossing time at the tidal radius.
                 f_ind = self.find_max * (1 - exp(- t / t_delay)) # Function for induced mass loss.
                 Mst_dotsev_ind += f_ind * Mst_dotsev # [Msun / Myrs] Add this contribution to the stellar mass loss.
                 rh_dot += 2 * Mst_dotsev_ind / M * rh * (1 + cg_factor / 2) / denom # [pc / Myrs] If it is, the half-mass radius decreases due to induced mass loss. It is derived from conservation of energy.
-            
+
         Mst_dot += Mst_dotev + Mst_dotsev + Mst_dotej + Mst_dotsev_ind + Mst_dotgmc + Mst_dotdisk # [Msun / Myrs] Correct the total stellar mass loss rate. This way, resummation in rhdot is avoided.
         mst_dot += mst_dotev + mst_dotsev + mst_dotej + mst_dotgmc + mst_dotdisk # [Msun / Myrs] Correct the average stellar mass loss rate by considering all contributions.
         
@@ -1566,7 +1585,7 @@ class clusterBH:
             RG_dot -= 2 / (4 - self.rt_index(RG)) * RG / tdf * numpy.heaviside(RG - 0.01, 0) # [kpc / Myrs] Galactocentric distance cannot be negative. Truncate to the tidal radius for small values.
             rh_dot += rh * RG_dot / RG * cg_factor / denom * (- rt_index + (rt_index - 3) / rt_index * (rt_index - 2) ) # [pc / Myrs] Should be rt_index - 2 + RG MG''(RG) / MG'(RG), MG taken from the galactic profile. To be included in the future for the rest potentials. Now works only for SIS.
         
-        derivs = numpy.array([Mst_dot, Mbh_dot, rh_dot, Mval_dot, mst_dot, RG_dot], dtype=object) # Save all derivatives in a sequence.
+        derivs = numpy.array([Mst_dot, Mbh_dot, rh_dot, Mval_dot, mst_dot, RG_dot, Nst_dotsev], dtype=object) # Save all derivatives in a sequence.
         
         return derivs # Return the derivatives in an array.
 
@@ -1604,17 +1623,21 @@ class clusterBH:
         Mval = [self.Mval0] # Initial parameter for mass segregation.
         mst = [self.m0] # [Msun] Initial average stellar mass.
         RG = [self.rg] # [kpc] Galactocentric distance.
+        Nst = [self.N]
        
-        y = [Mst[0], Mbh[0], rh[0], Mval[0], mst[0], RG[0]] # Combine them in a multivariable.
+        y = [Mst[0], Mbh[0], rh[0], Mval[0], mst[0], RG[0], Nst[0]] # Combine them in a multivariable.
+
+        self.y0 = y.copy()
 
         def event(t, y):
+
             # Check if either condition is still valid.
             condition_1 = y[0] - self.Mst_min  # Positive if stars are above the threshold.
             condition_2 = y[1] - self.Mbh_min  # Positive if BHs are above the threshold.
 
             # Event function returns the maximum of the two conditions. Stops only when both are negative.
             return numpy.max([condition_1, condition_2]) # Maximum is chosen because it suggests that this population dominates.
-       
+
         def tidal_overflow_event(t, y):
             # Condition for dissolved clusters. Future extension.
             if self.tidal:
@@ -1639,7 +1662,8 @@ class clusterBH:
         self.rh = sol.y[2] # [pc] Half-mass radius.
         self.Mval = sol.y[3] # Parameter for segregation.
         self.mst = sol.y[4] # [Msun] Average stellar mass.
-        
+        self.Nst = sol.y[6]
+
         self.mbh = numpy.array([self._mbh(x) for x in self.Mbh]) # [Msun] Average BH mass.
         mask_Mbh, mask_Mst = self.Mbh < self.mbh, self.Mst < self.mst_inf 
         self.Mbh[mask_Mbh] = 1e-99 # [Msun] BH mass corrected for mbh > Mbh.
@@ -1647,7 +1671,7 @@ class clusterBH:
         
         self.Mst[mask_Mst] = 1e-99 # [Msun] Stellar mass corrected for low stellar masses.
         self.mst[mask_Mst] = 1e-89 # [Msun] Correct the average stellar mass.
-        
+
         # Quantities for the cluster.
         self.M = self.Mst + self.Mbh # [Msun] Total mass of the cluster. BHs are included already. A small error in the first few Myrs is present.
         self.fbh = self.Mbh / self.M # BH fraction.
@@ -1656,6 +1680,7 @@ class clusterBH:
         
         # Further properties.
         self.psi = self._psi(self.fbh, self.M, self.mbh, self.mst) # Friction term ψ.
+        # self.Np = self.Nst + self.Nbh  # TODO Could use this if Nst_dot is correct
         self.Np = self.M * ( self.fbh / self.mbh + (1 - self.fbh) / self.mst) # Number of components. 
         self.mav = self.M / self.Np # [Msun] Average mass of cluster over time, includes BHs. No significant change is expected given that Nbh <= O(1e3), apart from the beginning where the difference is a few percent.
         self.mev = self.mst if not self.dark_clusters else self.mst + (self.mbh * self.psi - self.mst) * 2  / (1 + exp(self.k_bh * self.c_bh * (1 - self.fbh))) # [Msun] Average mass evaporated.
